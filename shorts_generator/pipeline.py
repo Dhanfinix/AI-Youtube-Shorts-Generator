@@ -21,6 +21,10 @@ def _run_local(
     download_format: str,
     language: Optional[str],
 ) -> Dict:
+    import os
+    import re
+    import json
+    import hashlib
     from .local.clipper import crop_highlights_local
     from .local.downloader import download_youtube_local
     from .local.llm import call_openai_llm
@@ -28,13 +32,46 @@ def _run_local(
 
     source_path = download_youtube_local(youtube_url, fmt=download_format)
 
-    transcript = transcribe_local(source_path, language=language)
-    if not transcript["segments"]:
+    # Extract Video ID for persistent checkpoint/caching
+    video_id = "unknown"
+    match = re.search(r"(?:v=|\/)([0-9A-Za-z_-]{11})", youtube_url)
+    if match:
+        video_id = match.group(1)
+    else:
+        video_id = hashlib.md5(youtube_url.encode()).hexdigest()
+
+    os.makedirs("cache", exist_ok=True)
+    transcript_cache_path = os.path.join("cache", f"{video_id}_transcript.json")
+    highlights_cache_path = os.path.join("cache", f"{video_id}_highlights.json")
+
+    # 1. Transcript Checkpoint
+    if os.path.exists(transcript_cache_path):
+        print(f"[cache] Loading transcript from checkpoint: {transcript_cache_path}", flush=True)
+        with open(transcript_cache_path, "r") as f:
+            transcript = json.load(f)
+    else:
+        transcript = transcribe_local(source_path, language=language, youtube_url=youtube_url)
+        if transcript.get("segments"):
+            with open(transcript_cache_path, "w") as f:
+                json.dump(transcript, f, indent=2)
+
+    if not transcript.get("segments"):
         raise RuntimeError(
             "Whisper produced no segments. The video may have no detectable speech."
         )
 
-    highlights_result = get_highlights(transcript, num_clips=num_clips, llm_fn=call_openai_llm)
+    # 2. Highlights Checkpoint
+    if os.path.exists(highlights_cache_path):
+        print(f"[cache] Loading highlights from checkpoint: {highlights_cache_path}", flush=True)
+        with open(highlights_cache_path, "r") as f:
+            highlights_result = json.load(f)
+    else:
+        highlights_result = get_highlights(transcript, num_clips=num_clips, llm_fn=call_openai_llm)
+        all_highlights = highlights_result.get("highlights", [])
+        if all_highlights:
+            with open(highlights_cache_path, "w") as f:
+                json.dump(highlights_result, f, indent=2)
+
     all_highlights: List[Dict] = highlights_result.get("highlights", [])
     if not all_highlights:
         raise RuntimeError("Highlight generator returned zero clips.")
@@ -42,7 +79,12 @@ def _run_local(
     top = sorted(all_highlights, key=lambda h: int(h.get("score", 0)), reverse=True)[:num_clips]
     print(f"[pipeline/local] cropping {len(top)} of {len(all_highlights)} candidates", flush=True)
 
-    shorts = crop_highlights_local(source_path, top, aspect_ratio=aspect_ratio)
+    shorts = crop_highlights_local(
+        source_path,
+        top,
+        aspect_ratio=aspect_ratio,
+        transcript_segments=transcript["segments"],
+    )
 
     return {
         "mode": "local",

@@ -46,6 +46,11 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["android"]
+            }
+        }
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:

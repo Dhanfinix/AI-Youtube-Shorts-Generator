@@ -1,0 +1,5 @@
+@import "tailwindcss";
+
+.main-video {
+  object-fit: cover;
+}

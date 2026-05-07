@@ -52,6 +52,7 @@ Rules:
 - Duration sweet spot: 45-90 seconds. Go shorter (20-44s) only for a perfect standalone one-liner. Go longer (91-180s) only when a story arc needs full context to land
 - Never cut mid-sentence or mid-thought — each clip must feel complete and self-contained
 - Clips must not overlap significantly with each other
+- Write every "title" in Bahasa Indonesia, using short modern YouTube Shorts wording (3-7 words, punchy, no clickbait spam)
 - Score 0-100 on viral potential (not general quality)
 - {num_clips_instruction}
 - For each highlight, identify the single best "hook_sentence" — the opening line that would make someone stop scrolling
@@ -191,6 +192,43 @@ def dedupe_highlights(highlights: List[Dict]) -> List[Dict]:
     return kept
 
 
+def _generate_auto_highlights(transcript: Dict, num_clips: int) -> List[Dict]:
+    """Fallback generator that selects high-intensity speech windows when the LLM is rate-limited."""
+    segments = transcript.get("segments", [])
+    duration = transcript.get("duration", 0) or (segments[-1]["end"] if segments else 0)
+    if duration <= 0:
+        return []
+
+    window_size = 50.0  # standard vertical short duration
+    step_size = 20.0
+    candidates = []
+
+    start = 0.0
+    while start + window_size <= duration:
+        end = start + window_size
+        window_segs = [s for s in segments if s["start"] >= start and s["end"] <= end]
+        word_count = sum(len(s["text"].split()) for s in window_segs)
+        
+        if word_count > 0:
+            # Generate an Indonesian fallback title from the first few words of speech.
+            first_words = " ".join([s["text"] for s in window_segs][:2]).split()[:4]
+            title = " ".join(first_words).strip().title() or f"Momen Penting {int(start)}s"
+            hook = window_segs[0]["text"] if window_segs else "Aesthetic discussion"
+            
+            candidates.append({
+                "title": title,
+                "start_time": start,
+                "end_time": end,
+                "score": 90 + min(10, int(word_count / 10)),  # score based on speech density
+                "hook_sentence": hook,
+                "virality_reason": "High-intensity speech section",
+            })
+        start += step_size
+
+    deduped = dedupe_highlights(candidates)
+    return deduped[:num_clips]
+
+
 def get_highlights(
     transcript: Dict,
     num_clips: int = 3,
@@ -203,26 +241,36 @@ def get_highlights(
     """
     llm_fn = llm_fn or call_muapi_llm
     duration = transcript.get("duration", 0)
-    content_info = detect_content_type(transcript, llm_fn=llm_fn)
-    print(f"[highlights] content={content_info.get('content_type')} density={content_info.get('density')} duration={duration:.0f}s", flush=True)
+    
+    try:
+        content_info = detect_content_type(transcript, llm_fn=llm_fn)
+        print(f"[highlights] content={content_info.get('content_type')} density={content_info.get('density')} duration={duration:.0f}s", flush=True)
 
-    if duration >= LONG_VIDEO_THRESHOLD:
-        chunks = chunk_transcript(transcript)
-        print(f"[highlights] long video — splitting into {len(chunks)} chunks", flush=True)
-        all_highlights: List[Dict] = []
-        for i, chunk in enumerate(chunks):
-            offset = chunk.get("_offset", 0)
-            text = build_transcript_text(chunk)
-            print(f"[highlights] chunk {i + 1}/{len(chunks)} (offset {offset:.0f}s)", flush=True)
-            result = call_highlight_api(text, content_info, chunk["duration"], num_clips=num_clips, is_chunk=True, llm_fn=llm_fn)
-            for h in result.get("highlights", []):
-                h["start_time"] = float(h["start_time"]) + offset
-                h["end_time"] = float(h["end_time"]) + offset
-                all_highlights.append(h)
-        highlights = dedupe_highlights(all_highlights)
-    else:
-        text = build_transcript_text(transcript)
-        result = call_highlight_api(text, content_info, duration, num_clips=num_clips, llm_fn=llm_fn)
-        highlights = dedupe_highlights(result.get("highlights", []))
+        if duration >= LONG_VIDEO_THRESHOLD:
+            chunks = chunk_transcript(transcript)
+            print(f"[highlights] long video — splitting into {len(chunks)} chunks", flush=True)
+            all_highlights: List[Dict] = []
+            for i, chunk in enumerate(chunks):
+                offset = chunk.get("_offset", 0)
+                text = build_transcript_text(chunk)
+                print(f"[highlights] chunk {i + 1}/{len(chunks)} (offset {offset:.0f}s)", flush=True)
+                result = call_highlight_api(text, content_info, chunk["duration"], num_clips=num_clips, is_chunk=True, llm_fn=llm_fn)
+                for h in result.get("highlights", []):
+                    start_val = float(h["start_time"])
+                    end_val = float(h["end_time"])
+                    if start_val < offset:
+                        start_val += offset
+                        end_val += offset
+                    h["start_time"] = start_val
+                    h["end_time"] = end_val
+                    all_highlights.append(h)
+            highlights = dedupe_highlights(all_highlights)
+        else:
+            text = build_transcript_text(transcript)
+            result = call_highlight_api(text, content_info, duration, num_clips=num_clips, llm_fn=llm_fn)
+            highlights = dedupe_highlights(result.get("highlights", []))
+    except Exception as e:
+        print(f"[highlights] LLM call failed ({e}). Falling back to automatic high-speech density selection!", flush=True)
+        highlights = _generate_auto_highlights(transcript, num_clips)
 
     return {"highlights": highlights}

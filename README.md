@@ -145,7 +145,7 @@ xargs -a urls.txt -I{} python main.py "{}"
 | `--mode` | `api` | `api` (MuAPI, fast, no setup) or `local` (yt-dlp + faster-whisper + OpenAI + ffmpeg) |
 | `--num-clips` | `3` | How many shorts to render |
 | `--aspect-ratio` | `9:16` | Any ratio; `9:16` for TikTok/Reels, `1:1` for square |
-| `--format` | `720` | Source download resolution: `360` / `480` / `720` / `1080` |
+| `--format` | `1080` | Source download resolution: `360` / `480` / `720` / `1080` |
 | `--language` | auto | Force Whisper language code (e.g. `en`) |
 | `--output-json` | — | Dump the full result (transcript + all candidates) to a file |
 
