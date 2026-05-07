@@ -210,8 +210,8 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
                     elif "youtu.be/" in video_url:
                         video_id = video_url.split("youtu.be/")[1].split("?")[0]
                     
-                    print("[download/local] Fetching active Invidious instances list...", flush=True)
-                    inst_res = requests.get("https://api.invidious.io/instances.json", timeout=10)
+                    print("[download/local] Fetching active Invidious instances list (sorted by type and users)...", flush=True)
+                    inst_res = requests.get("https://api.invidious.io/instances.json?pretty=1&sort_by=type,users", timeout=10)
                     instances_data = inst_res.json()
                     
                     instances = []
