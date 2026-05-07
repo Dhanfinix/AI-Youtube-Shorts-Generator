@@ -313,6 +313,184 @@ def _get_font(font_size: int, font_weight: str = "bold"):
     return ImageFont.load_default()
 
 
+def detect_highlight_keywords(text: str) -> List[str]:
+    """Identify high-impact keywords to highlight (verbs, emotionally charged words, pronouns, questions)."""
+    words = text.strip().upper().replace(".", "").replace(",", "").replace("?", "").replace("!", "").split()
+    impact_words = {
+        "BANYAK", "ISTRINYA", "NANYA", "NIKAH", "KAWIN", "MEMBUJANG", "VIRAL", "RAHASIA", "TIPS", "TRIK", 
+        "SUAMI", "ISTRI", "ANAK", "PENTING", "SALAH", "BENAR", "JALAN", "SELAMAT", "BELAJAR", "BISA", "HARUS",
+        "WELCOME", "EPISODE", "BENAR", "LURUS", "KESEMPATAN"
+    }
+    highlights = []
+    for w in words:
+        if w in impact_words or len(w) > 6:
+            highlights.append(w)
+    if not highlights and words:
+        highlights.append(max(words, key=len))
+    return highlights
+
+
+def draw_gradient_overlay(draw, out_w: int, out_h: int, pil_img):
+    """Draw a cinematic dark fade from the bottom (nearly black at the bottom)."""
+    from PIL import Image, ImageDraw
+    overlay = Image.new("RGBA", (out_w, out_h), (0, 0, 0, 0))
+    overlay_draw = ImageDraw.Draw(overlay)
+    for gy in range(int(out_h * 0.45), out_h):
+        factor = ((gy - out_h * 0.45) / (out_h * 0.55)) ** 1.8
+        alpha = int(245 * factor)
+        overlay_draw.line([(0, gy), (out_w, gy)], fill=(4, 4, 6, alpha))
+    return Image.alpha_composite(pil_img.convert("RGBA"), overlay)
+
+
+def draw_subject_outline(draw, out_w: int, out_h: int, center_x: float, center_y: float):
+    """Draw a hand-drawn creator-style accent ring or cutout outline around the speaker's face area."""
+    pass
+
+
+def draw_badge(draw, out_w: int, out_h: int, style: str = "modern_shorts"):
+    """Draw an asymmetrical high-energy badge at top-left."""
+    badge_x = int(out_w * 0.07)
+    badge_y = int(out_h * 0.09)
+    badge_font = _get_font(int(out_w * 0.045), "bold")
+    badge_text = "SHORTS PILIHAN"
+    
+    text_bbox = draw.textbbox((0, 0), badge_text, font=badge_font)
+    text_w = text_bbox[2] - text_bbox[0]
+    text_h = text_bbox[3] - text_bbox[1]
+    
+    pad_x = int(out_w * 0.03)
+    pad_y = int(out_h * 0.012)
+    
+    shadow_offset = 5
+    draw.rounded_rectangle(
+        [badge_x + shadow_offset, badge_y + shadow_offset, badge_x + text_w + pad_x * 2 + shadow_offset, badge_y + text_h + pad_y * 2 + shadow_offset],
+        radius=14,
+        fill=(0, 0, 0, 180)
+    )
+    draw.rounded_rectangle(
+        [badge_x, badge_y, badge_x + text_w + pad_x * 2, badge_y + text_h + pad_y * 2],
+        radius=14,
+        fill=(255, 222, 0, 255),  # Viral neon yellow
+        outline=(0, 0, 0, 255),
+        width=3
+    )
+    draw.text((badge_x + pad_x, badge_y + pad_y - 2), badge_text, fill=(8, 8, 8, 255), font=badge_font)
+
+
+def draw_cta(draw, out_w: int, out_h: int, style: str = "modern_shorts"):
+    """Draw a minimal, subtle CTA on the lower-right."""
+    sub_font = _get_font(int(out_w * 0.035), "bold")
+    sub_text = "• TONTON SAMPAI AKHIR"
+    sub_bbox = draw.textbbox((0, 0), sub_text, font=sub_font)
+    sub_w = sub_bbox[2] - sub_bbox[0]
+    sub_h = sub_bbox[3] - sub_bbox[1]
+    
+    sub_x = out_w - sub_w - int(out_w * 0.07)
+    sub_y = out_h - sub_h - int(out_h * 0.06)
+    
+    for ox, oy in [(-2, -2), (2, -2), (-2, 2), (2, 2), (0, 3)]:
+        draw.text((sub_x + ox, sub_y + oy), sub_text, fill=(0, 0, 0, 255), font=sub_font)
+    draw.text((sub_x, sub_y), sub_text, fill=(255, 255, 255, 230), font=sub_font)
+
+
+def draw_dynamic_title(draw, out_w: int, out_h: int, title: str, style: str = "modern_shorts"):
+    """Draw oversized, bold, high-contrast, asymmetrical typography with keyword highlighting directly on screen."""
+    title_text = title.upper()
+    highlights = detect_highlight_keywords(title_text)
+    
+    font_size = int(out_w * 0.10)
+    if len(title_text) > 34:
+        font_size = int(out_w * 0.08)
+        
+    title_font = _get_font(font_size, "bold")
+    margin_left = int(out_w * 0.08)
+    start_y = int(out_h * 0.58)
+    
+    words = title_text.split()
+    lines = []
+    current_line = []
+    
+    for word in words:
+        test_line = " ".join(current_line + [word])
+        test_bbox = draw.textbbox((0, 0), test_line, font=title_font)
+        test_w = test_bbox[2] - test_bbox[0]
+        if test_w <= (out_w - margin_left * 2) and len(current_line) < 2:
+            current_line.append(word)
+        else:
+            if current_line:
+                lines.append(current_line)
+            current_line = [word]
+    if current_line:
+        lines.append(current_line)
+        
+    lines = lines[:3]
+    
+    line_y = start_y
+    for line_idx, line_words in enumerate(lines):
+        x = margin_left
+        for w_idx, word in enumerate(line_words):
+            clean_word = word.replace(".", "").replace(",", "").replace("?", "").replace("!", "")
+            is_highlight = clean_word in highlights
+            
+            fill_color = (255, 222, 0, 255) if is_highlight else (255, 255, 255, 255)
+            stroke_w = 6
+            stroke_color = (0, 0, 0, 255)
+            
+            w_bbox = draw.textbbox((0, 0), word, font=title_font)
+            w_width = w_bbox[2] - w_bbox[0]
+            w_height = w_bbox[3] - w_bbox[1]
+            
+            draw.text(
+                (x + 4, line_y + 4),
+                word,
+                fill=(0, 0, 0, 180),
+                font=title_font
+            )
+            draw.text(
+                (x, line_y),
+                word,
+                fill=fill_color,
+                font=title_font,
+                stroke_width=stroke_w,
+                stroke_fill=stroke_color
+            )
+            
+            pass
+                
+            x += w_width + int(out_w * 0.03)
+            
+        line_y += font_size + int(out_h * 0.015)
+
+
+def render_thumbnail(
+    frame,
+    title: str,
+    out_w: int,
+    out_h: int,
+    center_x: float,
+    center_y: float,
+    style: str = "modern_shorts"
+):
+    """Redesign the current thumbnail renderer to look modern, dynamic, and attention-grabbing instead of boxy."""
+    import cv2
+    import numpy as np
+    from PIL import Image, ImageDraw
+    pil_img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    draw = ImageDraw.Draw(pil_img, "RGBA")
+    
+    pil_img = draw_gradient_overlay(draw, out_w, out_h, pil_img)
+    draw = ImageDraw.Draw(pil_img, "RGBA")
+    
+    if center_x > 0 and center_y > 0:
+        draw_subject_outline(draw, out_w, out_h, center_x, center_y)
+        
+    draw_badge(draw, out_w, out_h, style)
+    draw_dynamic_title(draw, out_w, out_h, title, style)
+    draw_cta(draw, out_w, out_h, style)
+    
+    return cv2.cvtColor(np.array(pil_img.convert("RGB")), cv2.COLOR_RGB2BGR)
+
+
 def _reframe_vertical(
     in_path: str,
     out_path: str,
@@ -431,118 +609,18 @@ def _reframe_vertical(
                     display_word = last_active_word
                     is_active = False
 
-            # Convert BGR (OpenCV) to RGB (PIL)
-            pil_img = Image.fromarray(cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB))
-            draw = ImageDraw.Draw(pil_img, "RGBA")
-
-            # 1. First 24 frames (~0.8s): Draw Teaser Card (just like Remotion)
+            # 1. First 24 frames (~0.8s): Draw Modern Creator Thumbnail Teaser
             if frame_idx < 24 and title:
-                # Draw linear dark gradient overlay at the bottom 60% of the screen
-                overlay = Image.new("RGBA", (out_w, out_h), (0, 0, 0, 0))
-                overlay_draw = ImageDraw.Draw(overlay)
-                for gy in range(int(out_h * 0.4), out_h):
-                    alpha = int(220 * ((gy - out_h * 0.4) / (out_h * 0.6)))
-                    overlay_draw.line([(0, gy), (out_w, gy)], fill=(0, 0, 0, alpha))
-                pil_img = Image.alpha_composite(pil_img.convert("RGBA"), overlay)
-                draw = ImageDraw.Draw(pil_img, "RGBA")
-
-                # Top Badge: "SHORTS PILIHAN"
-                badge_x = int(out_w * 0.07)
-                badge_y = int(out_h * 0.09)
-                badge_font = _get_font(int(out_w * 0.045), "bold")
-                badge_text = "SHORTS PILIHAN"
-                
-                text_bbox = draw.textbbox((0, 0), badge_text, font=badge_font)
-                text_w = text_bbox[2] - text_bbox[0]
-                text_h = text_bbox[3] - text_bbox[1]
-                
-                pad_x = int(out_w * 0.03)
-                pad_y = int(out_h * 0.01)
-                
-                draw.rounded_rectangle(
-                    [badge_x, badge_y, badge_x + text_w + pad_x * 2, badge_y + text_h + pad_y * 2],
-                    radius=12,
-                    fill=(255, 222, 0, 255)  # Bright Yellow #FFDE00
-                )
-                draw.text((badge_x + pad_x, badge_y + pad_y), badge_text, fill=(8, 8, 8, 255), font=badge_font)
-
-                # Bottom Card
-                card_left = int(out_w * 0.06)
-                card_right = int(out_w * 0.94)
-                card_bottom = int(out_h * 0.89)
-                card_top = int(out_h * 0.62)
-
-                draw.rounded_rectangle(
-                    [card_left, card_top, card_right, card_bottom],
-                    radius=18,
-                    fill=(8, 8, 8, 210),  # Dark semi-transparent
-                    outline=(255, 255, 255, 235),  # White border
-                    width=3
-                )
-
-                # Card Green Vertical Accent Bar
-                bar_left = card_left + 15
-                bar_top = card_top + 15
-                bar_bottom = card_bottom - 15
-                bar_right = bar_left + 8
-                draw.rounded_rectangle(
-                    [bar_left, bar_top, bar_right, bar_bottom],
-                    radius=4,
-                    fill=(46, 230, 166, 255)  # Bright green #2EE6A6
-                )
-
-                # Title Text inside card
-                title_x = bar_right + 15
-                title_y = bar_top + 5
-                title_text = title.upper()
-                
-                title_font_size = int(out_w * 0.052) if len(title_text) > 34 else int(out_w * 0.06)
-                title_font = _get_font(title_font_size, "bold")
-                
-                # Simple text-wrapping if title exceeds card width
-                max_text_w = card_right - title_x - 15
-                words = title_text.split()
-                lines = []
-                current_line = []
-                for word in words:
-                    test_line = " ".join(current_line + [word])
-                    test_bbox = draw.textbbox((0, 0), test_line, font=title_font)
-                    if (test_bbox[2] - test_bbox[0]) <= max_text_w:
-                        current_line.append(word)
-                    else:
-                        if current_line:
-                            lines.append(" ".join(current_line))
-                        current_line = [word]
-                if current_line:
-                    lines.append(" ".join(current_line))
-                
-                # Draw lines
-                line_y = title_y
-                for line in lines[:2]:  # Keep max 2 lines
-                    draw.text((title_x, line_y), line, fill=(255, 255, 255, 255), font=title_font)
-                    line_y += title_font_size + 5
-
-                # Bottom-right label "TONTON SAMPAI AKHIR" with red dot
-                sub_font = _get_font(int(out_w * 0.035), "bold")
-                sub_text = "TONTON SAMPAI AKHIR"
-                sub_bbox = draw.textbbox((0, 0), sub_text, font=sub_font)
-                sub_w = sub_bbox[2] - sub_bbox[0]
-                sub_h = sub_bbox[3] - sub_bbox[1]
-                
-                sub_x = card_right - sub_w - 20
-                sub_y = card_bottom - sub_h - 15
-                
-                dot_r = int(out_w * 0.01)
-                dot_cx = sub_x - 15
-                dot_cy = sub_y + sub_h // 2 + 2
-                draw.ellipse(
-                    [dot_cx - dot_r, dot_cy - dot_r, dot_cx + dot_r, dot_cy + dot_r],
-                    fill=(255, 59, 48, 255)  # Red #FF3B30
-                )
-                draw.text((sub_x, sub_y), sub_text, fill=(255, 255, 255, 210), font=sub_font)
+                face_canvas_x = int(((center_x - x0) / crop_w) * out_w)
+                face_canvas_y = int(out_h * 0.32)
+                cropped = render_thumbnail(cropped, title, out_w, out_h, face_canvas_x, face_canvas_y)
 
             # 2. Body frames (or active words): Draw Single Word Subtitles
             elif display_word:
+                # Convert BGR (OpenCV) to RGB (PIL)
+                pil_img = Image.fromarray(cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB))
+                draw = ImageDraw.Draw(pil_img, "RGBA")
+                
                 word_text = display_word["word"].upper()
                 sub_font_size = int(out_w * 0.06)
                 sub_font = _get_font(sub_font_size, "bold")
@@ -566,9 +644,9 @@ def _reframe_vertical(
                 
                 # Draw fill text
                 draw.text((sub_x, sub_y), word_text, fill=word_color, font=sub_font)
-
-            # Convert RGB (PIL) back to BGR (OpenCV)
-            cropped = cv2.cvtColor(np.array(pil_img.convert("RGB")), cv2.COLOR_RGB2BGR)
+                
+                # Convert RGB (PIL) back to BGR (OpenCV)
+                cropped = cv2.cvtColor(np.array(pil_img.convert("RGB")), cv2.COLOR_RGB2BGR)
 
         writer_proc.stdin.write(cropped.tobytes())
 
