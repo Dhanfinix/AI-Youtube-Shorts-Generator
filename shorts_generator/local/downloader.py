@@ -303,5 +303,39 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
                 flush=True,
             )
 
-    # All strategies exhausted
-    raise RuntimeError(f"yt-dlp download failed after all strategies: {last_err}")
+    # All strategies exhausted — Fallback to pytubefix
+    try:
+        print("[download/local] yt-dlp failed after all strategies. Trying fallback via pytubefix...", flush=True)
+        from pytubefix import YouTube
+        
+        yt = YouTube(video_url)
+        print(f"[download/local] [pytubefix] Connected to video: '{yt.title}'", flush=True)
+        
+        # Try to get highest progressive mp4 stream (with audio and video merged)
+        stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
+        if not stream:
+            # Fallback to any progressive stream
+            stream = yt.streams.filter(progressive=True).order_by('resolution').desc().first()
+        if not stream:
+            # Fallback to any mp4 stream
+            stream = yt.streams.filter(file_extension='mp4').order_by('resolution').desc().first()
+        if not stream:
+            stream = yt.streams.first()
+            
+        if not stream:
+            raise RuntimeError("No suitable streams found via pytubefix")
+            
+        print(f"[download/local] [pytubefix] Downloading stream resolution: {stream.resolution}...", flush=True)
+        
+        # Determine the target output filename
+        video_id = getattr(yt, "video_id", "video")
+        out_filename = f"source_{video_id}.mp4"
+        path = os.path.join(out_dir, out_filename)
+        
+        # Perform download
+        stream.download(output_path=out_dir, filename=out_filename)
+        print(f"[download/local] [pytubefix] ready: {path}", flush=True)
+        return path
+    except Exception as pytube_err:
+        print(f"[download/local] pytubefix fallback failed: {pytube_err}", flush=True)
+        raise RuntimeError(f"yt-dlp download failed after all strategies: {last_err}")
