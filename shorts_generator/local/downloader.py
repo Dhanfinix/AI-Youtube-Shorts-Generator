@@ -34,10 +34,34 @@ def _format_for(fmt: str) -> str:
 
 def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[str] = None) -> str:
     """Download to disk and return the local mp4 path."""
-    yt_dlp = _import_ytdlp()
     out_dir = out_dir or LOCAL_OUTPUT_DIR
     os.makedirs(out_dir, exist_ok=True)
 
+    # 1. Check if the URL is a Google Drive link or direct MP4 link
+    if "drive.google.com" in video_url or video_url.split("?")[0].endswith(".mp4"):
+        file_id = "direct_video"
+        download_url = video_url
+        if "drive.google.com" in video_url:
+            if "/file/d/" in video_url:
+                file_id = video_url.split("/file/d/")[1].split("/")[0]
+            elif "id=" in video_url:
+                file_id = video_url.split("id=")[1].split("&")[0]
+            download_url = f"https://docs.google.com/uc?export=download&id={file_id}"
+        
+        out_filename = f"source_{file_id}.mp4"
+        path = os.path.join(out_dir, out_filename)
+        
+        import requests
+        print(f"[download/local] Direct file/Drive link detected, downloading to {path}...", flush=True)
+        with requests.get(download_url, stream=True, timeout=60) as r:
+            r.raise_for_status()
+            with open(path, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    f.write(chunk)
+        print(f"[download/local] ready: {path}", flush=True)
+        return path
+
+    yt_dlp = _import_ytdlp()
     print(f"[download/local] {video_url} @ {fmt}p → {out_dir}/", flush=True)
     ydl_opts = {
         "format": _format_for(fmt),
@@ -129,11 +153,60 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
             print(f"[download/local] Downloading stream: {stream.resolution} via pytubefix to {path}...", flush=True)
             stream.download(output_path=out_dir, filename=out_filename)
         except Exception as pytube_err:
-            raise RuntimeError(
-                f"Both downloaders failed.\n"
-                f"  - yt-dlp error: {ytdl_err}\n"
-                f"  - pytubefix error: {pytube_err}"
-            ) from pytube_err
+            print(f"[download/local] pytubefix failed ({pytube_err}). Attempting fallback to Cobalt API...", flush=True)
+            try:
+                import requests
+                cobalt_instances = [
+                    "https://api.cobalt.tools/api/json",
+                    "https://cobalt.tools/api/json"
+                ]
+                download_url = None
+                for cobalt_url in cobalt_instances:
+                    try:
+                        payload = {
+                            "url": video_url,
+                            "vCodec": "h264",
+                            "vQuality": str(fmt),
+                            "filenamePattern": "classic"
+                        }
+                        headers = {
+                            "Accept": "application/json",
+                            "Content-Type": "application/json"
+                        }
+                        res = requests.post(cobalt_url, json=payload, headers=headers, timeout=15)
+                        if res.status_code == 200:
+                            data = res.json()
+                            if data.get("status") == "redirect" or data.get("status") == "stream":
+                                download_url = data.get("url")
+                                break
+                    except Exception as e:
+                        print(f"[download/local] Failed to contact Cobalt instance {cobalt_url}: {e}", flush=True)
+                
+                if download_url:
+                    video_id = "video"
+                    if "v=" in video_url:
+                        video_id = video_url.split("v=")[1].split("&")[0]
+                    elif "youtu.be/" in video_url:
+                        video_id = video_url.split("youtu.be/")[1].split("?")[0]
+                    
+                    out_filename = f"source_{video_id}.mp4"
+                    path = os.path.join(out_dir, out_filename)
+                    
+                    print(f"[download/local] Downloading direct MP4 from Cobalt API to {path}...", flush=True)
+                    with requests.get(download_url, stream=True, timeout=60) as r:
+                        r.raise_for_status()
+                        with open(path, 'wb') as f:
+                            for chunk in r.iter_content(chunk_size=8192):
+                                f.write(chunk)
+                else:
+                    raise RuntimeError("Cobalt API returned no download URL.")
+            except Exception as cobalt_err:
+                raise RuntimeError(
+                    f"All three downloaders failed.\n"
+                    f"  - yt-dlp error: {ytdl_err}\n"
+                    f"  - pytubefix error: {pytube_err}\n"
+                    f"  - Cobalt API error: {cobalt_err}"
+                ) from cobalt_err
 
     print(f"[download/local] ready: {path}", flush=True)
     return path
