@@ -108,26 +108,26 @@ def transcribe_local(
         try:
             transcript_list = YouTubeTranscriptApi().list(video_id)
             
-            # Select the appropriate transcript
+            # Select the appropriate transcript (prefer auto-generated for optimal word sync)
             transcript_obj = None
             if target_lang:
                 try:
-                    # Try manual transcript in target lang
-                    transcript_obj = transcript_list.find_manually_created_transcript([target_lang])
+                    # Try generated transcript in target lang (better sync)
+                    transcript_obj = transcript_list.find_generated_transcript([target_lang])
                 except Exception:
                     try:
-                        # Try generated transcript in target lang
-                        transcript_obj = transcript_list.find_generated_transcript([target_lang])
+                        # Try manual transcript in target lang
+                        transcript_obj = transcript_list.find_manually_created_transcript([target_lang])
                     except Exception:
                         pass
 
             if not transcript_obj:
-                # Fallback to any manual transcript, then any generated transcript
+                # Fallback to any generated transcript first, then manual
                 try:
-                    transcript_obj = transcript_list.find_manually_created_transcript()
+                    transcript_obj = transcript_list.find_generated_transcript()
                 except Exception:
                     try:
-                        transcript_obj = transcript_list.find_generated_transcript()
+                        transcript_obj = transcript_list.find_manually_created_transcript()
                     except Exception:
                         # Grab the first available transcript
                         transcript_obj = list(transcript_list)[0]
@@ -146,8 +146,22 @@ def transcribe_local(
                     continue
                 start = float(getattr(item, "start", 0.0))
                 duration = float(getattr(item, "duration", 0.0))
+                
+                # Resolve overlapping segments (non-overlapping boundaries)
+                if segments and start < segments[-1]["end"]:
+                    # Shrink previous segment's end time to start of this one
+                    segments[-1]["end"] = start
+                    # Re-calculate word timings for the previous segment based on its new non-overlapping duration
+                    prev_seg = segments[-1]
+                    prev_words = prev_seg["words"]
+                    if prev_words:
+                        prev_duration = max(0.1, start - prev_seg["start"])
+                        prev_word_dur = prev_duration / len(prev_words)
+                        for idx, pw in enumerate(prev_words):
+                            pw["start"] = prev_seg["start"] + idx * prev_word_dur
+                            pw["end"] = prev_seg["start"] + (idx + 1) * prev_word_dur
+                
                 end = start + duration
-
                 words = text.split()
                 word_list = []
                 if words and duration > 0:

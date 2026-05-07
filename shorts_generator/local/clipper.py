@@ -32,12 +32,12 @@ def _slugify(text: str) -> str:
 
 
 def _cut_subclip(source_path: str, start: float, end: float, out_path: str) -> str:
-    """ffmpeg -ss start -to end → re-encoded mp4 with audio."""
+    """ffmpeg -ss start -t duration → re-encoded mp4 with audio."""
     cmd = [
         "ffmpeg", "-y", "-loglevel", "error",
-        "-i", source_path,
         "-ss", f"{start:.3f}",
-        "-to", f"{end:.3f}",
+        "-i", source_path,
+        "-t", f"{end - start:.3f}",
         "-c:v", "libx264", "-preset", "fast", "-crf", "20",
         "-c:a", "aac", "-b:a", "128k",
         out_path,
@@ -84,6 +84,7 @@ def _get_word_captions(segments: List[Dict], start_time: float, end_time: float)
                     "start": w_start,
                     "end": w_end,
                 })
+
     return words
 
 
@@ -569,6 +570,7 @@ def _reframe_vertical(
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
     frame_idx = 0
+    teaser_frames = int(round(0.8 * fps))
     last_active_word = None
 
     while True:
@@ -576,7 +578,11 @@ def _reframe_vertical(
         if not ret:
             break
 
-        current_time = start_time + (frame_idx / fps)
+        msec = cap.get(cv2.CAP_PROP_POS_MSEC)
+        if msec > 0:
+            current_time = start_time + (msec / 1000.0)
+        else:
+            current_time = start_time + (frame_idx / fps)
         if focus_trajectory:
             center_x = focus_trajectory[min(frame_idx, len(focus_trajectory) - 1)]
         else:
@@ -609,8 +615,8 @@ def _reframe_vertical(
                     display_word = last_active_word
                     is_active = False
 
-            # 1. First 24 frames (~0.8s): Draw Modern Creator Thumbnail Teaser
-            if frame_idx < 24 and title:
+            # 1. First N frames (~0.8s): Draw Modern Creator Thumbnail Teaser
+            if frame_idx - 1 < teaser_frames and title:
                 face_canvas_x = int(((center_x - x0) / crop_w) * out_w)
                 face_canvas_y = int(out_h * 0.32)
                 cropped = render_thumbnail(cropped, title, out_w, out_h, face_canvas_x, face_canvas_y)
@@ -622,15 +628,24 @@ def _reframe_vertical(
                 draw = ImageDraw.Draw(pil_img, "RGBA")
                 
                 word_text = display_word["word"].upper()
-                sub_font_size = int(out_w * 0.06)
-                sub_font = _get_font(sub_font_size, "bold")
+                sub_font_size = int(out_w * 0.06)  # Standard default size
+                max_allowed_width = int(out_w * 0.88)
                 
+                while sub_font_size > 28:
+                    sub_font = _get_font(sub_font_size, "bold")
+                    sub_bbox = draw.textbbox((0, 0), word_text, font=sub_font)
+                    sub_w = sub_bbox[2] - sub_bbox[0]
+                    if sub_w <= max_allowed_width:
+                        break
+                    sub_font_size -= 4
+                    
+                sub_font = _get_font(sub_font_size, "bold")
                 sub_bbox = draw.textbbox((0, 0), word_text, font=sub_font)
                 sub_w = sub_bbox[2] - sub_bbox[0]
                 sub_h = sub_bbox[3] - sub_bbox[1]
                 
                 sub_x = (out_w - sub_w) // 2
-                sub_y = int(out_h * 0.75)  # Centered horizontally, at 75% height (lower third)
+                sub_y = int(out_h * 0.75)  # Centered horizontally, at 75% height
                 
                 word_color = (255, 222, 0, 255) if is_active else (255, 255, 255, 215)
                 
