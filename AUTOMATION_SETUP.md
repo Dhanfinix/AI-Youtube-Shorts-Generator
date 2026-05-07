@@ -69,7 +69,8 @@ Agar GitHub Actions dapat berjalan otomatis tanpa membocorkan kunci rahasia Anda
 | **`TELEGRAM_BOT_TOKEN`** | Token bot Telegram Anda dari Langkah 2. |
 | **`TELEGRAM_CHAT_ID`** | ID Chat/Grup/Channel Telegram target Anda dari Langkah 2. |
 | **`GOOGLE_SHEET_NAME`** | *(Opsional)* Nama Google Sheet Anda (Default: `YtClipper_Jobs`). |
-| **`YOUTUBE_COOKIES_BASE64`** | *(Sangat Direkomendasikan)* Cookies YouTube yang dikonversi ke Base64 untuk memotong blokir bot dari server GitHub Actions. |
+| **`YOUTUBE_COOKIES`** | *(Sangat Direkomendasikan)* Tempelkan seluruh teks mentah dari berkas `cookies.txt` Anda langsung di sini (tanpa konversi apa pun). |
+| **`YOUTUBE_COOKIES_BASE64`** | *(Alternatif)* Berkas cookies YouTube yang telah dikonversi ke format Base64. |
 
 ---
 

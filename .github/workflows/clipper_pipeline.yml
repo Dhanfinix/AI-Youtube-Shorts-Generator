@@ -31,6 +31,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -r requirements-local.txt
+          pip install -U yt-dlp
 
       - name: Run Automation Pipeline
         env:
@@ -41,10 +42,14 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           LOCAL_TRANSCRIBER_PRIORITY: ${{ secrets.LOCAL_TRANSCRIBER_PRIORITY || 'youtube' }}
           LOCAL_TARGET_LANGUAGE: ${{ secrets.LOCAL_TARGET_LANGUAGE || 'auto' }}
+          YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
           YOUTUBE_COOKIES_BASE64: ${{ secrets.YOUTUBE_COOKIES_BASE64 }}
         run: |
-          if [ ! -z "$YOUTUBE_COOKIES_BASE64" ]; then
-            echo "[automation] Loading YouTube cookies from secret..."
+          if [ ! -z "$YOUTUBE_COOKIES" ]; then
+            echo "[automation] Loading raw YouTube cookies from secret..."
+            echo "$YOUTUBE_COOKIES" > cookies.txt
+          elif [ ! -z "$YOUTUBE_COOKIES_BASE64" ]; then
+            echo "[automation] Loading Base64 YouTube cookies from secret..."
             echo "$YOUTUBE_COOKIES_BASE64" | base64 --decode > cookies.txt
           fi
           python automation.py
