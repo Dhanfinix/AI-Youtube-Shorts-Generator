@@ -8,9 +8,28 @@ on:
     # Allow manual execution via GitHub UI
 
 jobs:
-  process-clips:
+  install-deps:
     runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-local.txt
+          pip install -U yt-dlp pytubefix
+
+  process-clips:
+    needs: install-deps
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -26,12 +45,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg
 
-      - name: Install Python Dependencies
+      - name: Restore and Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -r requirements-local.txt
-          pip install -U yt-dlp
+          pip install -U yt-dlp pytubefix
 
       - name: Run Automation Pipeline
         env:

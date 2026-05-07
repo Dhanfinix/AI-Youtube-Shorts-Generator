@@ -86,16 +86,50 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
                 print(f"[download/local] Using local cookies file: {found_path}", flush=True)
                 break
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(video_url, download=True)
-        path = ydl.prepare_filename(info)
-        # merge_output_format may rename the extension after merge
-        if not os.path.exists(path):
-            stem, _ = os.path.splitext(path)
-            for ext in (".mp4", ".mkv", ".webm"):
-                if os.path.exists(stem + ext):
-                    path = stem + ext
-                    break
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(video_url, download=True)
+            path = ydl.prepare_filename(info)
+            # merge_output_format may rename the extension after merge
+            if not os.path.exists(path):
+                stem, _ = os.path.splitext(path)
+                for ext in (".mp4", ".mkv", ".webm"):
+                    if os.path.exists(stem + ext):
+                        path = stem + ext
+                        break
+    except Exception as ytdl_err:
+        print(f"[download/local] yt-dlp failed to download ({ytdl_err}). Attempting fallback to pytubefix...", flush=True)
+        try:
+            from pytubefix import YouTube  # type: ignore
+            
+            video_id = "video"
+            if "v=" in video_url:
+                video_id = video_url.split("v=")[1].split("&")[0]
+            elif "youtu.be/" in video_url:
+                video_id = video_url.split("youtu.be/")[1].split("?")[0]
+            
+            yt = YouTube(video_url)
+            # Find progressive mp4 stream or highest resolution stream
+            stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
+            if not stream:
+                stream = yt.streams.filter(file_extension='mp4').order_by('resolution').desc().first()
+            if not stream:
+                stream = yt.streams.order_by('resolution').desc().first()
+                
+            if not stream:
+                raise RuntimeError("No downloadable streams found via pytubefix.")
+                
+            out_filename = f"source_{video_id}.mp4"
+            path = os.path.join(out_dir, out_filename)
+            
+            print(f"[download/local] Downloading stream: {stream.resolution} via pytubefix to {path}...", flush=True)
+            stream.download(output_path=out_dir, filename=out_filename)
+        except Exception as pytube_err:
+            raise RuntimeError(
+                f"Both downloaders failed.\n"
+                f"  - yt-dlp error: {ytdl_err}\n"
+                f"  - pytubefix error: {pytube_err}"
+            ) from pytube_err
 
     print(f"[download/local] ready: {path}", flush=True)
     return path
