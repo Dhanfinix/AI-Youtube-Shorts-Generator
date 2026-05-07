@@ -265,8 +265,26 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
                         path = stem + ext
                         break
     except Exception as ytdl_err:
-        print(f"[download/local] yt-dlp failed to download ({ytdl_err}).", flush=True)
-        raise RuntimeError(f"yt-dlp download failed: {ytdl_err}")
+        if "cookiefile" in ydl_opts:
+            print(f"[download/local] yt-dlp failed with cookies ({ytdl_err}). Retrying WITHOUT cookies...", flush=True)
+            ydl_opts_no_cookies = ydl_opts.copy()
+            ydl_opts_no_cookies.pop("cookiefile", None)
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts_no_cookies) as ydl:
+                    info = ydl.extract_info(video_url, download=True)
+                    path = ydl.prepare_filename(info)
+                    if not os.path.exists(path):
+                        stem, _ = os.path.splitext(path)
+                        for ext in (".mp4", ".mkv", ".webm"):
+                            if os.path.exists(stem + ext):
+                                path = stem + ext
+                                break
+            except Exception as retry_err:
+                print(f"[download/local] yt-dlp failed without cookies ({retry_err}).", flush=True)
+                raise RuntimeError(f"yt-dlp download failed: {retry_err}")
+        else:
+            print(f"[download/local] yt-dlp failed to download ({ytdl_err}).", flush=True)
+            raise RuntimeError(f"yt-dlp download failed: {ytdl_err}")
 
     print(f"[download/local] ready: {path}", flush=True)
     return path
