@@ -295,21 +295,6 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
                 f"[download/local] Strategy {idx} failed ({type(err).__name__}): {err}",
                 flush=True,
             )
-            # Only continue retrying for bot-detection / auth errors
-            err_str = str(err).lower()
-            is_bot_error = any(
-                phrase in err_str
-                for phrase in [
-                    "sign in to confirm",
-                    "not a bot",
-                    "confirm your age",
-                    "login required",
-                    "403",
-                ]
-            )
-            if not is_bot_error:
-                # Non-auth error (e.g. video not found, network timeout) — stop retrying
-                break
 
     # All strategies exhausted
     raise RuntimeError(f"yt-dlp download failed after all strategies: {last_err}")
