@@ -157,7 +157,9 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
             try:
                 import requests
                 cobalt_instances = [
-                    "https://api.cobalt.tools/api/json",
+                    "https://co.wuk.sh/api/json",
+                    "https://cobalt.luigi-pizz.app/api/json",
+                    "https://cobalt.tuqa.me/api/json",
                     "https://cobalt.tools/api/json"
                 ]
                 download_url = None
@@ -218,19 +220,23 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
                     for item in instances_data:
                         if isinstance(item, list) and len(item) == 2:
                             hostname, info = item
-                            if isinstance(info, dict) and info.get("type") == "https" and info.get("api", False) and info.get("online", False):
+                            # 'online' property was removed by Invidious registry, 'api' can be True, False, or None
+                            if isinstance(info, dict) and info.get("type") == "https" and info.get("api") is True:
                                 instances.append(f"https://{hostname}")
                     
                     if not instances:
-                        instances = ["https://yewtu.be", "https://vid.puffyan.us", "https://invidious.snopyta.org"]
+                        instances = ["https://inv.thepixora.com", "https://yewtu.be", "https://vid.puffyan.us"]
                         
                     download_url = None
                     selected_instance = None
-                    for instance in instances[:10]: # Try first 10 instances to be fast
+                    # Standard User-Agent to bypass Cloudflare blocks on Invidious instances
+                    req_headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+                    
+                    for instance in instances[:15]: # Try first 15 instances to be safe
                         try:
                             print(f"[download/local] Querying Invidious instance: {instance}...", flush=True)
                             api_url = f"{instance}/api/v1/videos/{video_id}"
-                            res = requests.get(api_url, timeout=8)
+                            res = requests.get(api_url, headers=req_headers, timeout=10)
                             if res.status_code == 200:
                                 data = res.json()
                                 streams = data.get("formatStreams", [])
@@ -255,7 +261,7 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
                         out_filename = f"source_{video_id}.mp4"
                         path = os.path.join(out_dir, out_filename)
                         print(f"[download/local] Downloading direct MP4 from Invidious instance ({selected_instance}) to {path}...", flush=True)
-                        with requests.get(download_url, stream=True, timeout=90) as r:
+                        with requests.get(download_url, headers=req_headers, stream=True, timeout=90) as r:
                             r.raise_for_status()
                             with open(path, 'wb') as f:
                                 for chunk in r.iter_content(chunk_size=8192):
