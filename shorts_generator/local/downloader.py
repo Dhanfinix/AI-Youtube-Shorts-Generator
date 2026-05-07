@@ -405,42 +405,55 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
                         video_id = video_url.split("youtu.be/")[1].split("?")[0]
                     
                     print("[download/local] Fetching active Invidious instances list (sorted by type and users)...", flush=True)
-                    inst_res = requests.get(
-                        "https://api.invidious.io/instances.json?pretty=1&sort_by=type,users",
-                        proxies=req_proxies,
-                        timeout=10,
-                    )
-                    instances_data = inst_res.json()
-                    
-                    instances = []
-                    for item in instances_data:
-                        if isinstance(item, list) and len(item) == 2:
-                            hostname, info = item
-                            # 'online' property was removed by Invidious registry, 'api' can be True, False, or None
-                            if isinstance(info, dict) and info.get("type") == "https" and info.get("api") is True:
-                                instances.append(f"https://{hostname}")
-                    
-                    if not instances:
-                        instances = ["https://inv.thepixora.com", "https://yewtu.be", "https://vid.puffyan.us"]
+                    curated_instances = [
+                        "https://yewtu.be",
+                        "https://vid.puffyan.us",
+                        "https://invidious.privacydev.net",
+                        "https://inv.tux.pizza",
+                        "https://invidious.nerdvpn.de",
+                        "https://invidious.flokinet.to",
+                        "https://inv.thepixora.com",
+                        "https://iv.melmac.space"
+                    ]
+                    instances = list(curated_instances)
+                    try:
+                        inst_res = requests.get(
+                            "https://api.invidious.io/instances.json?pretty=1&sort_by=type,users",
+                            proxies=req_proxies,
+                            timeout=10,
+                        )
+                        if inst_res.status_code == 200:
+                            instances_data = inst_res.json()
+                            for item in instances_data:
+                                if isinstance(item, list) and len(item) == 2:
+                                    hostname, info = item
+                                    if isinstance(info, dict) and info.get("type") == "https":
+                                        inst_url = f"https://{hostname}"
+                                        if inst_url not in instances:
+                                            instances.append(inst_url)
+                    except Exception as list_err:
+                        print(f"[download/local] Failed to fetch dynamic Invidious list: {list_err}. Relying on curated list.", flush=True)
                         
                     download_url = None
                     selected_instance = None
                     # Standard User-Agent to bypass Cloudflare blocks on Invidious instances
                     req_headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
                     
-                    for instance in instances[:15]: # Try first 15 instances to be safe
+                    for instance in instances[:20]: # Try first 20 instances to be safe
                         try:
                             # Option 1: Try the direct proxied streaming URL via local=true to bypass Google IP bans completely!
                             for itag in ("22", "18"):
                                 test_url = f"{instance}/latest_version?id={video_id}&itag={itag}&local=true"
                                 print(f"[download/local] Trying Invidious proxied stream: {test_url}...", flush=True)
                                 try:
-                                    res = requests.get(test_url, headers=req_headers, proxies=req_proxies, stream=True, timeout=10)
+                                    res = requests.get(test_url, headers=req_headers, proxies=req_proxies, stream=True, timeout=8)
+                                    print(f"[download/local] Invidious instance {instance} (itag {itag}) returned status code: {res.status_code}", flush=True)
                                     if res.status_code == 200:
                                         download_url = test_url
                                         selected_instance = instance
                                         break
-                                except Exception:
+                                except Exception as test_err:
+                                    print(f"[download/local] Invidious instance {instance} (itag {itag}) stream test failed: {test_err}", flush=True)
                                     continue
                             if download_url:
                                 break
