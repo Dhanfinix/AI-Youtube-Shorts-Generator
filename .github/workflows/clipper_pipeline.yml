@@ -26,6 +26,12 @@ jobs:
       - name: Set up FFmpeg
         uses: FedericoCarboni/setup-ffmpeg@v3
 
+      - name: Install Chromium (for yt-dlp PO Token generation)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y chromium-browser || sudo apt-get install -y chromium
+          echo "CHROMIUM_PATH=$(which chromium-browser || which chromium)" >> $GITHUB_ENV
+
       - name: Install and Start Tor Service
         if: ${{ env.ENABLE_TOR_PROXY == 'true' }}
         run: |
@@ -38,7 +44,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -r requirements-local.txt
-          pip install -U yt-dlp pytubefix pysocks yt-dlp-getpot-wpc
+          pip install -U "yt-dlp>=2025.05.01" pytubefix pysocks yt-dlp-getpot-wpc nodriver
+
+      - name: Verify yt-dlp setup
+        run: |
+          python -c "import yt_dlp; print(f'yt-dlp version: {yt_dlp.version.__version__}')"
+          yt-dlp --version
+          echo "--- Installed PO Token Providers ---"
+          yt-dlp -v --skip-download "https://www.youtube.com/watch?v=dQw4w9WgXcQ" 2>&1 | grep -i "pot\|getpot\|provider" || echo "No PO token providers detected"
 
       - name: Run Automation Pipeline
         env:
@@ -50,12 +63,12 @@ jobs:
           LOCAL_TRANSCRIBER_PRIORITY: ${{ secrets.LOCAL_TRANSCRIBER_PRIORITY || 'youtube' }}
           LOCAL_TARGET_LANGUAGE: ${{ secrets.LOCAL_TARGET_LANGUAGE || 'auto' }}
           YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
-          YOUTUBE_COOKIES_BASE64: ${{ secrets.YOUTUBE_COOKIES_BASE64 }}
           ENABLE_TOR_PROXY: ${{ secrets.ENABLE_TOR_PROXY || 'false' }}
           YOUTUBE_PROXY: ${{ secrets.YOUTUBE_PROXY }}
-          YT_DLP_PLAYER_CLIENTS: ${{ secrets.YT_DLP_PLAYER_CLIENTS || 'android' }}
+          YT_DLP_PLAYER_CLIENTS: ${{ secrets.YT_DLP_PLAYER_CLIENTS || 'web_creator,default' }}
           YOUTUBE_PO_TOKEN: ${{ secrets.YOUTUBE_PO_TOKEN }}
           YOUTUBE_VISITOR_DATA: ${{ secrets.YOUTUBE_VISITOR_DATA }}
           RAPID_YT_API_KEY: ${{ secrets.RAPID_YT_API_KEY }}
         run: |
           python automation.py
+

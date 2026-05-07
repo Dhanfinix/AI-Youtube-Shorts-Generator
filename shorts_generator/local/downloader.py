@@ -112,18 +112,7 @@ def _write_cookie_secret(out_dir: str, value: str, source: str) -> Optional[str]
 
 def _load_cookiefile(out_dir: str) -> Optional[str]:
     cookies_env = os.getenv("YOUTUBE_COOKIES")
-    cookies_b64_env = os.getenv("YOUTUBE_COOKIES_BASE64")
     cookies_file_env = os.getenv("YOUTUBE_COOKIES_FILE")
-
-    if cookies_b64_env:
-        import base64
-
-        try:
-            decoded = base64.b64decode(cookies_b64_env).decode("utf-8")
-        except Exception as e:
-            print(f"[download/local] Error decoding YOUTUBE_COOKIES_BASE64: {e}", flush=True)
-        else:
-            return _write_cookie_secret(out_dir, decoded, "YOUTUBE_COOKIES_BASE64")
 
     if cookies_env:
         return _write_cookie_secret(out_dir, cookies_env, "YOUTUBE_COOKIES")
@@ -175,12 +164,15 @@ def _proxy_config() -> tuple[Optional[str], Optional[dict]]:
     return None, None
 
 
-def _youtube_extractor_args() -> dict:
-    player_clients = [
-        item.strip()
-        for item in (os.getenv("YT_DLP_PLAYER_CLIENTS") or "android").split(",")
-        if item.strip()
-    ]
+def _youtube_extractor_args(player_clients_override: Optional[list] = None) -> dict:
+    if player_clients_override:
+        player_clients = player_clients_override
+    else:
+        player_clients = [
+            item.strip()
+            for item in (os.getenv("YT_DLP_PLAYER_CLIENTS") or "web_creator,default").split(",")
+            if item.strip()
+        ]
     args = {"player_client": player_clients}
 
     po_token = os.getenv("YOUTUBE_PO_TOKEN") or os.getenv("YT_DLP_PO_TOKEN")
@@ -190,6 +182,35 @@ def _youtube_extractor_args() -> dict:
     if visitor_data:
         args["visitor_data"] = [visitor_data]
     return {"youtube": args}
+
+
+# ── Retry strategies: each entry is a list of player_client values to try ──
+_FALLBACK_STRATEGIES = [
+    # Strategy 0: user-configured (env) or default web_creator,default
+    None,
+    # Strategy 1: web_creator alone (works best with cookies on datacenter IPs)
+    ["web_creator"],
+    # Strategy 2: default client (mweb / tv)
+    ["default"],
+    # Strategy 3: web + web_creator
+    ["web", "web_creator"],
+    # Strategy 4: ios client (different bot-detection path)
+    ["ios"],
+    # Strategy 5: android_vr (least restricted historically)
+    ["android_vr"],
+]
+
+
+def _resolve_output_path(ydl, info) -> str:
+    """Resolve the final output file path after yt-dlp download + merge."""
+    path = ydl.prepare_filename(info)
+    if os.path.exists(path):
+        return path
+    stem, _ = os.path.splitext(path)
+    for ext in (".mp4", ".mkv", ".webm"):
+        if os.path.exists(stem + ext):
+            return stem + ext
+    return path
 
 
 def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[str] = None) -> str:
@@ -225,66 +246,70 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
 
     yt_dlp = _import_ytdlp()
     print(f"[download/local] {video_url} @ {fmt}p → {out_dir}/", flush=True)
-    ydl_opts = {
-        "format": _format_for(fmt),
-        "outtmpl": os.path.join(out_dir, "source_%(id)s.%(ext)s"),
-        "merge_output_format": "mp4",
-        "quiet": True,
-        "no_warnings": True,
-        "noprogress": True,
-        "retries": 3,
-        "fragment_retries": 3,
-        "extractor_retries": 3,
-        "sleep_interval_requests": 1,
-        "extractor_args": _youtube_extractor_args(),
-        "http_headers": {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            ),
-            "Accept-Language": "en-US,en;q=0.9",
-        },
-    }
-    if ytdlp_proxy:
-        ydl_opts["proxy"] = ytdlp_proxy
 
     cookie_path = _load_cookiefile(out_dir)
-    if cookie_path:
-        ydl_opts["cookiefile"] = cookie_path
 
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(video_url, download=True)
-            path = ydl.prepare_filename(info)
-            # merge_output_format may rename the extension after merge
-            if not os.path.exists(path):
-                stem, _ = os.path.splitext(path)
-                for ext in (".mp4", ".mkv", ".webm"):
-                    if os.path.exists(stem + ext):
-                        path = stem + ext
-                        break
-    except Exception as ytdl_err:
-        if "cookiefile" in ydl_opts:
-            print(f"[download/local] yt-dlp failed with cookies ({ytdl_err}). Retrying WITHOUT cookies...", flush=True)
-            ydl_opts_no_cookies = ydl_opts.copy()
-            ydl_opts_no_cookies.pop("cookiefile", None)
-            try:
-                with yt_dlp.YoutubeDL(ydl_opts_no_cookies) as ydl:
-                    info = ydl.extract_info(video_url, download=True)
-                    path = ydl.prepare_filename(info)
-                    if not os.path.exists(path):
-                        stem, _ = os.path.splitext(path)
-                        for ext in (".mp4", ".mkv", ".webm"):
-                            if os.path.exists(stem + ext):
-                                path = stem + ext
-                                break
-            except Exception as retry_err:
-                print(f"[download/local] yt-dlp failed without cookies ({retry_err}).", flush=True)
-                raise RuntimeError(f"yt-dlp download failed: {retry_err}")
-        else:
-            print(f"[download/local] yt-dlp failed to download ({ytdl_err}).", flush=True)
-            raise RuntimeError(f"yt-dlp download failed: {ytdl_err}")
+    # ── Try each player-client strategy in order ──
+    last_err: Optional[Exception] = None
 
-    print(f"[download/local] ready: {path}", flush=True)
-    return path
+    for idx, strategy in enumerate(_FALLBACK_STRATEGIES):
+        extractor_args = _youtube_extractor_args(player_clients_override=strategy)
+        clients_label = strategy or (os.getenv("YT_DLP_PLAYER_CLIENTS") or "web_creator,default")
+        print(f"[download/local] Strategy {idx}: player_client={clients_label}", flush=True)
+
+        ydl_opts = {
+            "format": _format_for(fmt),
+            "outtmpl": os.path.join(out_dir, "source_%(id)s.%(ext)s"),
+            "merge_output_format": "mp4",
+            "quiet": True,
+            "no_warnings": True,
+            "noprogress": True,
+            "retries": 3,
+            "fragment_retries": 3,
+            "extractor_retries": 3,
+            "sleep_interval_requests": 1,
+            "extractor_args": extractor_args,
+            "http_headers": {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/131.0.0.0 Safari/537.36"
+                ),
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+        }
+        if ytdlp_proxy:
+            ydl_opts["proxy"] = ytdlp_proxy
+        if cookie_path:
+            ydl_opts["cookiefile"] = cookie_path
+
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(video_url, download=True)
+                path = _resolve_output_path(ydl, info)
+            print(f"[download/local] ready: {path}", flush=True)
+            return path
+        except Exception as err:
+            last_err = err
+            print(
+                f"[download/local] Strategy {idx} failed ({type(err).__name__}): {err}",
+                flush=True,
+            )
+            # Only continue retrying for bot-detection / auth errors
+            err_str = str(err).lower()
+            is_bot_error = any(
+                phrase in err_str
+                for phrase in [
+                    "sign in to confirm",
+                    "not a bot",
+                    "confirm your age",
+                    "login required",
+                    "403",
+                ]
+            )
+            if not is_bot_error:
+                # Non-auth error (e.g. video not found, network timeout) — stop retrying
+                break
+
+    # All strategies exhausted
+    raise RuntimeError(f"yt-dlp download failed after all strategies: {last_err}")
