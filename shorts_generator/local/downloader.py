@@ -53,6 +53,13 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
         }
     }
 
+    # Automatically load cookies if present
+    for name in ("cookies.txt", "youtube_cookies.txt"):
+        if os.path.exists(name):
+            ydl_opts["cookiefile"] = name
+            print(f"[download/local] Using cookies file: {name}", flush=True)
+            break
+
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(video_url, download=True)
         path = ydl.prepare_filename(info)

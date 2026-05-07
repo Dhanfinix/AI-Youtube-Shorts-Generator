@@ -121,7 +121,7 @@ def process_automation():
         print("[automation] No pending jobs found. Exiting gracefully.", flush=True)
         return
 
-    youtube_url = job_data["YouTube URL"]
+    youtube_url = str(job_data.get("YouTube URL", "")).strip()
     clips_count = int(job_data.get("Clips Count", 3) or 3)
     language_code = job_data.get("Language", "auto")
     if str(language_code).strip().lower() in ["", "auto", "none"]:
@@ -137,6 +137,14 @@ def process_automation():
     sheet.update_cell(pending_row_idx, 6, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
     try:
+        # Validate URL format
+        if not youtube_url.startswith(("http://", "https://")):
+            raise ValueError(
+                f"Tautan '{youtube_url}' bukan URL asli yang valid. "
+                f"Pastikan Anda memasukkan URL asli (dimulai dengan http:// atau https://) di Google Sheet, "
+                f"bukan nama/judul video atau Smart Chip."
+            )
+
         # 2. Run YtClipper Local Generator
         result = generate_shorts(
             youtube_url=youtube_url,
