@@ -48,12 +48,43 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
         "noprogress": True,
     }
 
-    # Automatically load cookies if present
-    for name in ("cookies.txt", "youtube_cookies.txt"):
-        if os.path.exists(name):
-            ydl_opts["cookiefile"] = name
-            print(f"[download/local] Using cookies file: {name}", flush=True)
-            break
+    # Automatically load cookies if present in environment or local files
+    cookies_env = os.getenv("YOUTUBE_COOKIES")
+    cookies_b64_env = os.getenv("YOUTUBE_COOKIES_BASE64")
+    
+    if cookies_env:
+        cookie_path = os.path.join(out_dir, "youtube_cookies_temp.txt")
+        with open(cookie_path, "w", encoding="utf-8") as f:
+            f.write(cookies_env)
+        ydl_opts["cookiefile"] = cookie_path
+        print("[download/local] Using cookies loaded from YOUTUBE_COOKIES environment variable.", flush=True)
+    elif cookies_b64_env:
+        import base64
+        cookie_path = os.path.join(out_dir, "youtube_cookies_temp.txt")
+        try:
+            decoded = base64.b64decode(cookies_b64_env).decode("utf-8")
+            with open(cookie_path, "w", encoding="utf-8") as f:
+                f.write(decoded)
+            ydl_opts["cookiefile"] = cookie_path
+            print("[download/local] Using cookies decoded from YOUTUBE_COOKIES_BASE64 environment variable.", flush=True)
+        except Exception as e:
+            print(f"[download/local] Error decoding YOUTUBE_COOKIES_BASE64: {e}", flush=True)
+    else:
+        for name in ("cookies.txt", "youtube_cookies.txt"):
+            possible_paths = [
+                name,
+                os.path.join(os.getcwd(), name),
+                os.path.abspath(name),
+            ]
+            found_path = None
+            for p in possible_paths:
+                if os.path.exists(p):
+                    found_path = p
+                    break
+            if found_path:
+                ydl_opts["cookiefile"] = found_path
+                print(f"[download/local] Using local cookies file: {found_path}", flush=True)
+                break
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(video_url, download=True)

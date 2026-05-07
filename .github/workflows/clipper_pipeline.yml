@@ -45,11 +45,4 @@ jobs:
           YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
           YOUTUBE_COOKIES_BASE64: ${{ secrets.YOUTUBE_COOKIES_BASE64 }}
         run: |
-          if [ ! -z "$YOUTUBE_COOKIES" ]; then
-            echo "[automation] Loading raw YouTube cookies from secret..."
-            echo "$YOUTUBE_COOKIES" > cookies.txt
-          elif [ ! -z "$YOUTUBE_COOKIES_BASE64" ]; then
-            echo "[automation] Loading Base64 YouTube cookies from secret..."
-            echo "$YOUTUBE_COOKIES_BASE64" | base64 --decode > cookies.txt
-          fi
           python automation.py
