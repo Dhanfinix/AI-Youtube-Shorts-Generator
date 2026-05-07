@@ -332,7 +332,10 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
                             out_filename = f"source_{video_id}.mp4"
                             path = os.path.join(out_dir, out_filename)
                             print(f"[download/local] Downloading direct MP4 from RapidAPI to {path}...", flush=True)
-                            with requests.get(download_url, proxies=req_proxies, stream=True, timeout=90) as r:
+                            dl_headers = {
+                                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                            }
+                            with requests.get(download_url, headers=dl_headers, proxies=req_proxies, stream=True, timeout=90) as r:
                                 r.raise_for_status()
                                 with open(path, 'wb') as f:
                                     for chunk in r.iter_content(chunk_size=8192):
