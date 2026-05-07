@@ -138,6 +138,13 @@ Create a `urls.txt` file with one URL per line, then:
 xargs -a urls.txt -I{} python main.py "{}"
 ```
 
+### Hands-Free Automation (Google Sheets + Telegram + GitHub Actions)
+
+Run a fully automated content generation engine for free using GitHub Actions. Simply paste your YouTube links into a Google Sheet, and the pipeline will automatically pull pending links, process them in local mode, upload high-quality vertical shorts directly to your Telegram channel, and update the sheet row status.
+
+To set up this feature, follow our complete **[Automation Setup Guide](AUTOMATION_SETUP.md)**.
+
+
 ### CLI flags
 
 | Flag | Default | Notes |
