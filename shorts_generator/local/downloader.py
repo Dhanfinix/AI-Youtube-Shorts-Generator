@@ -201,12 +201,75 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
                 else:
                     raise RuntimeError("Cobalt API returned no download URL.")
             except Exception as cobalt_err:
-                raise RuntimeError(
-                    f"All three downloaders failed.\n"
-                    f"  - yt-dlp error: {ytdl_err}\n"
-                    f"  - pytubefix error: {pytube_err}\n"
-                    f"  - Cobalt API error: {cobalt_err}"
-                ) from cobalt_err
+                print(f"[download/local] Cobalt API failed ({cobalt_err}). Attempting fallback to Invidious public instances...", flush=True)
+                try:
+                    import requests
+                    video_id = "video"
+                    if "v=" in video_url:
+                        video_id = video_url.split("v=")[1].split("&")[0]
+                    elif "youtu.be/" in video_url:
+                        video_id = video_url.split("youtu.be/")[1].split("?")[0]
+                    
+                    print("[download/local] Fetching active Invidious instances list...", flush=True)
+                    inst_res = requests.get("https://api.invidious.io/instances.json", timeout=10)
+                    instances_data = inst_res.json()
+                    
+                    instances = []
+                    for item in instances_data:
+                        if isinstance(item, list) and len(item) == 2:
+                            hostname, info = item
+                            if isinstance(info, dict) and info.get("type") == "https" and info.get("api", False) and info.get("online", False):
+                                instances.append(f"https://{hostname}")
+                    
+                    if not instances:
+                        instances = ["https://yewtu.be", "https://vid.puffyan.us", "https://invidious.snopyta.org"]
+                        
+                    download_url = None
+                    selected_instance = None
+                    for instance in instances[:10]: # Try first 10 instances to be fast
+                        try:
+                            print(f"[download/local] Querying Invidious instance: {instance}...", flush=True)
+                            api_url = f"{instance}/api/v1/videos/{video_id}"
+                            res = requests.get(api_url, timeout=8)
+                            if res.status_code == 200:
+                                data = res.json()
+                                streams = data.get("formatStreams", [])
+                                if streams:
+                                    selected_stream = None
+                                    for s in streams:
+                                        if s.get("height") == 720 or s.get("quality") == "hd720":
+                                            selected_stream = s
+                                            break
+                                    if not selected_stream:
+                                        selected_stream = streams[0]
+                                    
+                                    download_url = selected_stream.get("url")
+                                    if download_url:
+                                        selected_instance = instance
+                                        break
+                        except Exception as inst_err:
+                            print(f"[download/local] Instance {instance} query failed: {inst_err}", flush=True)
+                            continue
+                            
+                    if download_url:
+                        out_filename = f"source_{video_id}.mp4"
+                        path = os.path.join(out_dir, out_filename)
+                        print(f"[download/local] Downloading direct MP4 from Invidious instance ({selected_instance}) to {path}...", flush=True)
+                        with requests.get(download_url, stream=True, timeout=90) as r:
+                            r.raise_for_status()
+                            with open(path, 'wb') as f:
+                                for chunk in r.iter_content(chunk_size=8192):
+                                    f.write(chunk)
+                    else:
+                        raise RuntimeError("No healthy Invidious instances returned video streams.")
+                except Exception as invidious_err:
+                    raise RuntimeError(
+                        f"All four downloaders failed.\n"
+                        f"  - yt-dlp error: {ytdl_err}\n"
+                        f"  - pytubefix error: {pytube_err}\n"
+                        f"  - Cobalt API error: {cobalt_err}\n"
+                        f"  - Invidious API error: {invidious_err}"
+                    ) from invidious_err
 
     print(f"[download/local] ready: {path}", flush=True)
     return path
