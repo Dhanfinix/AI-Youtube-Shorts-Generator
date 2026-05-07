@@ -38,7 +38,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -r requirements-local.txt
-          pip install -U yt-dlp pytubefix pysocks
+          pip install -U yt-dlp pytubefix pysocks yt-dlp-getpot-wpc
 
       - name: Run Automation Pipeline
         env:
@@ -53,7 +53,7 @@ jobs:
           YOUTUBE_COOKIES_BASE64: ${{ secrets.YOUTUBE_COOKIES_BASE64 }}
           ENABLE_TOR_PROXY: ${{ secrets.ENABLE_TOR_PROXY || 'false' }}
           YOUTUBE_PROXY: ${{ secrets.YOUTUBE_PROXY }}
-          YT_DLP_PLAYER_CLIENTS: ${{ secrets.YT_DLP_PLAYER_CLIENTS || 'web,mweb,android' }}
+          YT_DLP_PLAYER_CLIENTS: ${{ secrets.YT_DLP_PLAYER_CLIENTS || 'android' }}
           YOUTUBE_PO_TOKEN: ${{ secrets.YOUTUBE_PO_TOKEN }}
           YOUTUBE_VISITOR_DATA: ${{ secrets.YOUTUBE_VISITOR_DATA }}
           RAPID_YT_API_KEY: ${{ secrets.RAPID_YT_API_KEY }}

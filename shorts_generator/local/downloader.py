@@ -178,7 +178,7 @@ def _proxy_config() -> tuple[Optional[str], Optional[dict]]:
 def _youtube_extractor_args() -> dict:
     player_clients = [
         item.strip()
-        for item in (os.getenv("YT_DLP_PLAYER_CLIENTS") or "web,mweb,android").split(",")
+        for item in (os.getenv("YT_DLP_PLAYER_CLIENTS") or "android").split(",")
         if item.strip()
     ]
     args = {"player_client": player_clients}
