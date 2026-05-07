@@ -63,6 +63,8 @@ jobs:
           LOCAL_TRANSCRIBER_PRIORITY: ${{ secrets.LOCAL_TRANSCRIBER_PRIORITY || 'youtube' }}
           LOCAL_TARGET_LANGUAGE: ${{ secrets.LOCAL_TARGET_LANGUAGE || 'auto' }}
           YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
+          YOUTUBE_USERNAME: ${{ secrets.YOUTUBE_USERNAME }}
+          YOUTUBE_PASSWORD: ${{ secrets.YOUTUBE_PASSWORD }}
           ENABLE_TOR_PROXY: ${{ secrets.ENABLE_TOR_PROXY || 'false' }}
           YOUTUBE_PROXY: ${{ secrets.YOUTUBE_PROXY }}
           YT_DLP_PLAYER_CLIENTS: ${{ secrets.YT_DLP_PLAYER_CLIENTS || 'web_creator,default' }}

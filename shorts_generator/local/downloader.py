@@ -283,6 +283,13 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
         if cookie_path:
             ydl_opts["cookiefile"] = cookie_path
 
+        username = os.getenv("YOUTUBE_USERNAME")
+        password = os.getenv("YOUTUBE_PASSWORD")
+        if username:
+            ydl_opts["username"] = username
+        if password:
+            ydl_opts["password"] = password
+
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(video_url, download=True)
