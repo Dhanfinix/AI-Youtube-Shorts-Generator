@@ -34,6 +34,8 @@ if not LOCAL_LLM_PROVIDER:
 
 LOCAL_WHISPER_MODEL = os.getenv("LOCAL_WHISPER_MODEL", "base")
 LOCAL_WHISPER_DEVICE = os.getenv("LOCAL_WHISPER_DEVICE", "auto")  # auto / cpu / cuda
+LOCAL_TRANSCRIBER_PRIORITY = os.getenv("LOCAL_TRANSCRIBER_PRIORITY", "youtube").strip().lower()  # youtube / whisper
+LOCAL_TARGET_LANGUAGE = os.getenv("LOCAL_TARGET_LANGUAGE", "auto").strip().lower()  # auto / id / en / etc.
 LOCAL_OUTPUT_DIR = os.getenv("LOCAL_OUTPUT_DIR", "output")
 USE_REMOTION = os.getenv("USE_REMOTION", "false").lower() == "true"
 

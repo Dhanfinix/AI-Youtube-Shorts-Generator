@@ -52,7 +52,7 @@ Rules:
 - Duration sweet spot: 45-90 seconds. Go shorter (20-44s) only for a perfect standalone one-liner. Go longer (91-180s) only when a story arc needs full context to land
 - Never cut mid-sentence or mid-thought — each clip must feel complete and self-contained
 - Clips must not overlap significantly with each other
-- Write every "title" in Bahasa Indonesia, using short modern YouTube Shorts wording (3-7 words, punchy, no clickbait spam)
+- Write every "title" in the same language as the video content, capturing the true punchy essence/hook of that specific segment rather than just taking the first few words (3-7 words, high-energy, curiosity-inducing, no clickbait spam)
 - Score 0-100 on viral potential (not general quality)
 - {num_clips_instruction}
 - For each highlight, identify the single best "hook_sentence" — the opening line that would make someone stop scrolling
@@ -210,9 +210,10 @@ def _generate_auto_highlights(transcript: Dict, num_clips: int) -> List[Dict]:
         word_count = sum(len(s["text"].split()) for s in window_segs)
         
         if word_count > 0:
-            # Generate an Indonesian fallback title from the first few words of speech.
-            first_words = " ".join([s["text"] for s in window_segs][:2]).split()[:4]
-            title = " ".join(first_words).strip().title() or f"Momen Penting {int(start)}s"
+            # Generate a punchy fallback title representing the hook segment.
+            words_pool = [w for s in window_segs for w in s["text"].split()]
+            title_words = words_pool[2:7] if len(words_pool) > 6 else words_pool[:4]
+            title = " ".join(title_words).strip().title() or f"Highlight {int(start)}s"
             hook = window_segs[0]["text"] if window_segs else "Aesthetic discussion"
             
             candidates.append({
