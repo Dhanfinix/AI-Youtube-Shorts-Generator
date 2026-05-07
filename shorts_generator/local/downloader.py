@@ -296,6 +296,52 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
             print(f"[download/local] Downloading stream: {stream.resolution} via pytubefix to {path}...", flush=True)
             stream.download(output_path=out_dir, filename=out_filename)
         except Exception as pytube_err:
+            # Try RapidAPI YTStream Fallback if key is available
+            rapid_api_key = os.getenv("RAPID_YT_API_KEY") or os.getenv("RAPID_API_KEY")
+            if rapid_api_key:
+                print("[download/local] pytubefix failed. Attempting fallback to RapidAPI YTStream...", flush=True)
+                try:
+                    import requests
+                    video_id = "video"
+                    if "v=" in video_url:
+                        video_id = video_url.split("v=")[1].split("&")[0]
+                    elif "youtu.be/" in video_url:
+                        video_id = video_url.split("youtu.be/")[1].split("?")[0]
+
+                    headers = {
+                        "x-rapidapi-host": "ytstream-download-youtube-videos.p.rapidapi.com",
+                        "x-rapidapi-key": rapid_api_key,
+                        "Content-Type": "application/json"
+                    }
+                    api_url = f"https://ytstream-download-youtube-videos.p.rapidapi.com/dl?id={video_id}"
+                    res = requests.get(api_url, headers=headers, proxies=req_proxies, timeout=15)
+                    if res.status_code == 200:
+                        data = res.json()
+                        download_url = data.get("link")
+                        if not download_url:
+                            formats = data.get("formats", []) or data.get("adaptiveFormats", [])
+                            if isinstance(formats, list):
+                                for f in formats:
+                                    if f.get("quality") == "720p" or "720" in str(f.get("qualityLabel", "")):
+                                        download_url = f.get("url")
+                                        break
+                                if not download_url and formats:
+                                    download_url = formats[0].get("url")
+
+                        if download_url:
+                            out_filename = f"source_{video_id}.mp4"
+                            path = os.path.join(out_dir, out_filename)
+                            print(f"[download/local] Downloading direct MP4 from RapidAPI to {path}...", flush=True)
+                            with requests.get(download_url, proxies=req_proxies, stream=True, timeout=90) as r:
+                                r.raise_for_status()
+                                with open(path, 'wb') as f:
+                                    for chunk in r.iter_content(chunk_size=8192):
+                                        f.write(chunk)
+                            print(f"[download/local] ready via RapidAPI: {path}", flush=True)
+                            return path
+                except Exception as rapid_err:
+                    print(f"[download/local] RapidAPI YTStream failed: {rapid_err}. Continuing with remaining fallbacks...", flush=True)
+
             print(f"[download/local] pytubefix failed ({pytube_err}). Attempting fallback to Cobalt API...", flush=True)
             try:
                 import requests

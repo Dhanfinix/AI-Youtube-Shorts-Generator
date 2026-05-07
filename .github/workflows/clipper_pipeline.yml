@@ -56,5 +56,6 @@ jobs:
           YT_DLP_PLAYER_CLIENTS: ${{ secrets.YT_DLP_PLAYER_CLIENTS || 'web,mweb,android' }}
           YOUTUBE_PO_TOKEN: ${{ secrets.YOUTUBE_PO_TOKEN }}
           YOUTUBE_VISITOR_DATA: ${{ secrets.YOUTUBE_VISITOR_DATA }}
+          RAPID_YT_API_KEY: ${{ secrets.RAPID_YT_API_KEY }}
         run: |
           python automation.py
