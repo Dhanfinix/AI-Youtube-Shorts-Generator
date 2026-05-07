@@ -76,27 +76,12 @@ Agar GitHub Actions dapat berjalan otomatis tanpa membocorkan kunci rahasia Anda
 
 ## ⚡ Langkah 4: Cara Menjalankan & Menguji
 
-### 🚀 Solusi Anti-Block YouTube: Menjalankan `local_sync.py` di Mac Anda
-Karena YouTube memblokir pengunduhan dari alamat IP pusat data seperti GitHub Actions, kami menyediakan skrip otomatisasi hibrida pintar bernama **`local_sync.py`** yang berjalan di latar belakang Mac Anda secara hands-free!
-
-1. **Bagaimana Cara Kerjanya?**
-   * Anda cukup memasukkan tautan YouTube biasa di Google Sheets.
-   * Skrip `local_sync.py` yang berjalan di Mac Anda mendeteksi pekerjaan baru, mengunduhnya secara otomatis menggunakan alamat IP rumah Anda yang aman, lalu mengunggahnya ke Google Drive Anda dan mengganti URL di lembar kerja dengan tautan Google Drive.
-   * GitHub Actions kemudian mendeteksi tautan Google Drive tersebut, mengunduhnya secara instan (tanpa blokir bot!), dan menyelesaikan tugas kliping berat, merender video, lalu mengirimkannya ke Telegram!
-
-2. **Cara Menjalankannya:**
-   Buka terminal di Mac Anda, lalu jalankan perintah berikut:
-   ```bash
-   python local_sync.py
-   ```
-   Skrip ini akan memeriksa Google Sheets setiap 15 detik secara otomatis. Anda bisa membiarkannya berjalan di latar belakang saat Anda bekerja!
-
-### Menjalankan Seluruh Pipeline Secara Lokal (Local Test)
-Jika Anda ingin menguji seluruh pipeline kliping secara langsung dari terminal komputer Mac Anda sebelum di-push:
+### Menjalankan Secara Lokal (Local Test)
+Jika Anda ingin mengujinya langsung dari terminal komputer Mac Anda sebelum di-push:
 1. Pastikan Anda sudah membuat berkas `.env` lokal Anda yang berisi variabel di atas, atau taruh berkas JSON Service Account Anda di folder root dengan nama `google_credentials.json`.
 2. Jalankan perintah:
    ```bash
-   python automation.py
+   ./venv/bin/python automation.py
    ```
 
 ### Menjalankan Secara Otomatis (GitHub Actions)
