@@ -108,7 +108,11 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
             elif "youtu.be/" in video_url:
                 video_id = video_url.split("youtu.be/")[1].split("?")[0]
             
-            yt = YouTube(video_url)
+            # Try initializing with 'WEB' client to trigger automatic PO token generation, fallback to use_po_token=True
+            try:
+                yt = YouTube(video_url, 'WEB')
+            except Exception:
+                yt = YouTube(video_url, use_po_token=True)
             # Find progressive mp4 stream or highest resolution stream
             stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
             if not stream:
