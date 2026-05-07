@@ -284,6 +284,35 @@ def _build_focus_trajectory(
     return trajectory
 
 
+def _get_font(font_size: int, font_weight: str = "bold"):
+    """Load a modern sans-serif system font or fallback."""
+    import os
+    from PIL import ImageFont
+    paths = []
+    if font_weight == "bold":
+        paths = [
+            "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+            "/System/Library/Fonts/Helvetica-Bold.ttf",
+            "/System/Library/Fonts/SFNS.ttf",
+            "/Library/Fonts/Arial Bold.ttf",
+        ]
+    else:
+        paths = [
+            "/System/Library/Fonts/Helvetica.ttc",
+            "/System/Library/Fonts/Supplemental/Arial.ttf",
+            "/System/Library/Fonts/Supplemental/Helvetica.ttf",
+            "/Library/Fonts/Arial.ttf",
+        ]
+    
+    for path in paths:
+        if os.path.exists(path):
+            try:
+                return ImageFont.truetype(path, font_size)
+            except Exception:
+                pass
+    return ImageFont.load_default()
+
+
 def _reframe_vertical(
     in_path: str,
     out_path: str,
@@ -291,6 +320,7 @@ def _reframe_vertical(
     start_time: float,
     word_captions: List[Dict],
     draw_subtitles: bool = True,
+    title: Optional[str] = None,
 ) -> str:
     """Crop video, apply smooth horizontal face tracking, and burn karaoke captions."""
     try:
@@ -300,6 +330,9 @@ def _reframe_vertical(
             "opencv-python is required for --mode local. Install it with:\n"
             "    pip install -r requirements-local.txt"
         ) from e
+
+    from PIL import Image, ImageDraw, ImageFont
+    import numpy as np
 
     target_ratio = _ratio(aspect_ratio)
     cap = cv2.VideoCapture(in_path)
@@ -320,6 +353,12 @@ def _reframe_vertical(
     crop_w = max(2, crop_w - (crop_w % 2))
     crop_h = max(2, crop_h - (crop_h % 2))
 
+    # For vertical 9:16, we want standard 1080x1920 Full HD portrait
+    if aspect_ratio == "9:16":
+        out_w, out_h = 1080, 1920
+    else:
+        out_w, out_h = crop_w, crop_h
+
     face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
 
     focus_trajectory = _build_focus_trajectory(
@@ -338,7 +377,7 @@ def _reframe_vertical(
         "-f", "rawvideo",
         "-vcodec", "rawvideo",
         "-pix_fmt", "bgr24",
-        "-s", f"{crop_w}x{crop_h}",
+        "-s", f"{out_w}x{out_h}",
         "-r", f"{fps:.3f}",
         "-i", "-",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
@@ -352,7 +391,6 @@ def _reframe_vertical(
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
     frame_idx = 0
-    last_phrase = []
     last_active_word = None
 
     while True:
@@ -371,91 +409,166 @@ def _reframe_vertical(
 
         cropped = frame[y0:y0 + crop_h, x0:x0 + crop_w]
 
-        if draw_subtitles:
-            # Active word-level highlighting (Karaoke) logic
-            active_word_obj = None
-            current_phrase = []
+        # Upscale cropped frame to standard crisp Full HD (1080x1920) before drawing overlays
+        if out_w != crop_w or out_h != crop_h:
+            cropped = cv2.resize(cropped, (out_w, out_h), interpolation=cv2.INTER_CUBIC)
 
-            for i, w in enumerate(word_captions):
+        if draw_subtitles:
+            # Active word-level highlighting logic (matches Remotion single active word)
+            display_word = None
+            is_active = False
+
+            for idx, w in enumerate(word_captions):
                 if w["start"] <= current_time <= w["end"]:
-                    active_word_obj = w
-                    chunk_idx = i // 3  # Group into 3-word phrases
-                    start_idx = chunk_idx * 3
-                    end_idx = min(len(word_captions), start_idx + 3)
-                    current_phrase = word_captions[start_idx:end_idx]
+                    display_word = w
+                    is_active = True
+                    last_active_word = w
                     break
 
-            # Retain last phrase during small gaps so text doesn't flicker out
-            if not current_phrase and active_word_obj is None:
-                current_phrase = last_phrase
-                active_word_obj = last_active_word
-            else:
-                last_phrase = current_phrase
-                last_active_word = active_word_obj
+            if not display_word and last_active_word:
+                # Keep showing last word if the gap is small (less than 1.0 seconds)
+                if current_time - last_active_word["end"] < 1.0:
+                    display_word = last_active_word
+                    is_active = False
 
-            if current_phrase:
-                font = cv2.FONT_HERSHEY_DUPLEX
-                scale = crop_w / 320.0
-                border_thickness = max(3, int(scale * 6.5))
-                fill_thickness = max(1, int(scale * 1.8))
+            # Convert BGR (OpenCV) to RGB (PIL)
+            pil_img = Image.fromarray(cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB))
+            draw = ImageDraw.Draw(pil_img, "RGBA")
+
+            # 1. First 24 frames (~0.8s): Draw Teaser Card (just like Remotion)
+            if frame_idx < 24 and title:
+                # Draw linear dark gradient overlay at the bottom 60% of the screen
+                overlay = Image.new("RGBA", (out_w, out_h), (0, 0, 0, 0))
+                overlay_draw = ImageDraw.Draw(overlay)
+                for gy in range(int(out_h * 0.4), out_h):
+                    alpha = int(220 * ((gy - out_h * 0.4) / (out_h * 0.6)))
+                    overlay_draw.line([(0, gy), (out_w, gy)], fill=(0, 0, 0, alpha))
+                pil_img = Image.alpha_composite(pil_img.convert("RGBA"), overlay)
+                draw = ImageDraw.Draw(pil_img, "RGBA")
+
+                # Top Badge: "SHORTS PILIHAN"
+                badge_x = int(out_w * 0.07)
+                badge_y = int(out_h * 0.09)
+                badge_font = _get_font(int(out_w * 0.045), "bold")
+                badge_text = "SHORTS PILIHAN"
                 
-                space_w, _ = cv2.getTextSize(" ", font, scale, fill_thickness)
-                space_w = space_w[0]
+                text_bbox = draw.textbbox((0, 0), badge_text, font=badge_font)
+                text_w = text_bbox[2] - text_bbox[0]
+                text_h = text_bbox[3] - text_bbox[1]
+                
+                pad_x = int(out_w * 0.03)
+                pad_y = int(out_h * 0.01)
+                
+                draw.rounded_rectangle(
+                    [badge_x, badge_y, badge_x + text_w + pad_x * 2, badge_y + text_h + pad_y * 2],
+                    radius=12,
+                    fill=(255, 222, 0, 255)  # Bright Yellow #FFDE00
+                )
+                draw.text((badge_x + pad_x, badge_y + pad_y), badge_text, fill=(8, 8, 8, 255), font=badge_font)
 
-                # Calculate phrase width
-                sizes = []
-                total_w = 0
-                for w in current_phrase:
-                    (w_w, w_h), _ = cv2.getTextSize(w["word"], font, scale, border_thickness)
-                    sizes.append((w_w, w_h))
-                    total_w += w_w
-                total_w += space_w * (len(current_phrase) - 1)
+                # Bottom Card
+                card_left = int(out_w * 0.06)
+                card_right = int(out_w * 0.94)
+                card_bottom = int(out_h * 0.89)
+                card_top = int(out_h * 0.62)
 
-                # Dynamic scale-down loop: Ensure text stays within 85% of the screen width
-                max_allowed_w = int(crop_w * 0.85)
-                while total_w > max_allowed_w and scale > 0.3:
-                    scale -= 0.05
-                    border_thickness = max(3, int(scale * 6.5))
-                    fill_thickness = max(1, int(scale * 1.8))
-                    space_w, _ = cv2.getTextSize(" ", font, scale, fill_thickness)
-                    space_w = space_w[0]
-                    sizes = []
-                    total_w = 0
-                    for w in current_phrase:
-                        (w_w, w_h), _ = cv2.getTextSize(w["word"], font, scale, border_thickness)
-                        sizes.append((w_w, w_h))
-                        total_w += w_w
-                    total_w += space_w * (len(current_phrase) - 1)
+                draw.rounded_rectangle(
+                    [card_left, card_top, card_right, card_bottom],
+                    radius=18,
+                    fill=(8, 8, 8, 210),  # Dark semi-transparent
+                    outline=(255, 255, 255, 235),  # White border
+                    width=3
+                )
 
-                # Center position
-                pos_x = (crop_w - total_w) // 2
-                pos_y = int(crop_h * 0.78)
+                # Card Green Vertical Accent Bar
+                bar_left = card_left + 15
+                bar_top = card_top + 15
+                bar_bottom = card_bottom - 15
+                bar_right = bar_left + 8
+                draw.rounded_rectangle(
+                    [bar_left, bar_top, bar_right, bar_bottom],
+                    radius=4,
+                    fill=(46, 230, 166, 255)  # Bright green #2EE6A6
+                )
 
-                # Find the active word index for word-by-word reveal
-                active_idx = -1
-                if active_word_obj:
-                    for idx, w in enumerate(current_phrase):
-                        if w == active_word_obj:
-                            active_idx = idx
-                            break
-                # Fallback: if active_word_obj is None, show all words in the phrase
-                if active_idx == -1:
-                    active_idx = len(current_phrase) - 1
+                # Title Text inside card
+                title_x = bar_right + 15
+                title_y = bar_top + 5
+                title_text = title.upper()
+                
+                title_font_size = int(out_w * 0.052) if len(title_text) > 34 else int(out_w * 0.06)
+                title_font = _get_font(title_font_size, "bold")
+                
+                # Simple text-wrapping if title exceeds card width
+                max_text_w = card_right - title_x - 15
+                words = title_text.split()
+                lines = []
+                current_line = []
+                for word in words:
+                    test_line = " ".join(current_line + [word])
+                    test_bbox = draw.textbbox((0, 0), test_line, font=title_font)
+                    if (test_bbox[2] - test_bbox[0]) <= max_text_w:
+                        current_line.append(word)
+                    else:
+                        if current_line:
+                            lines.append(" ".join(current_line))
+                        current_line = [word]
+                if current_line:
+                    lines.append(" ".join(current_line))
+                
+                # Draw lines
+                line_y = title_y
+                for line in lines[:2]:  # Keep max 2 lines
+                    draw.text((title_x, line_y), line, fill=(255, 255, 255, 255), font=title_font)
+                    line_y += title_font_size + 5
 
-                for idx, w in enumerate(current_phrase):
-                    if idx > active_idx:
-                        break  # Word-by-word reveal: don't draw future words yet
-                    
-                    w_w, w_h = sizes[idx]
-                    is_active = (w == active_word_obj)
-                    fill_color = (0, 215, 255) if is_active else (255, 255, 255)  # Premium Vibrant Gold vs Pure White
-                    
-                    # Draw black outline
-                    cv2.putText(cropped, w["word"], (pos_x, pos_y), font, scale, (0, 0, 0), border_thickness, cv2.LINE_AA)
-                    # Draw fill
-                    cv2.putText(cropped, w["word"], (pos_x, pos_y), font, scale, fill_color, fill_thickness, cv2.LINE_AA)
-                    
-                    pos_x += w_w + space_w
+                # Bottom-right label "TONTON SAMPAI AKHIR" with red dot
+                sub_font = _get_font(int(out_w * 0.035), "bold")
+                sub_text = "TONTON SAMPAI AKHIR"
+                sub_bbox = draw.textbbox((0, 0), sub_text, font=sub_font)
+                sub_w = sub_bbox[2] - sub_bbox[0]
+                sub_h = sub_bbox[3] - sub_bbox[1]
+                
+                sub_x = card_right - sub_w - 20
+                sub_y = card_bottom - sub_h - 15
+                
+                dot_r = int(out_w * 0.01)
+                dot_cx = sub_x - 15
+                dot_cy = sub_y + sub_h // 2 + 2
+                draw.ellipse(
+                    [dot_cx - dot_r, dot_cy - dot_r, dot_cx + dot_r, dot_cy + dot_r],
+                    fill=(255, 59, 48, 255)  # Red #FF3B30
+                )
+                draw.text((sub_x, sub_y), sub_text, fill=(255, 255, 255, 210), font=sub_font)
+
+            # 2. Body frames (or active words): Draw Single Word Subtitles
+            elif display_word:
+                word_text = display_word["word"].upper()
+                sub_font_size = int(out_w * 0.06)
+                sub_font = _get_font(sub_font_size, "bold")
+                
+                sub_bbox = draw.textbbox((0, 0), word_text, font=sub_font)
+                sub_w = sub_bbox[2] - sub_bbox[0]
+                sub_h = sub_bbox[3] - sub_bbox[1]
+                
+                sub_x = (out_w - sub_w) // 2
+                sub_y = int(out_h * 0.75)  # Centered horizontally, at 75% height (lower third)
+                
+                word_color = (255, 222, 0, 255) if is_active else (255, 255, 255, 215)
+                
+                # Draw thick black shadow/outline
+                shadow_offsets = [
+                    (3, 3), (-3, -3), (3, -3), (-3, 3),
+                    (0, 4), (0, -4), (4, 0), (-4, 0)
+                ]
+                for ox, oy in shadow_offsets:
+                    draw.text((sub_x + ox, sub_y + oy), word_text, fill=(0, 0, 0, 255), font=sub_font)
+                
+                # Draw fill text
+                draw.text((sub_x, sub_y), word_text, fill=word_color, font=sub_font)
+
+            # Convert RGB (PIL) back to BGR (OpenCV)
+            cropped = cv2.cvtColor(np.array(pil_img.convert("RGB")), cv2.COLOR_RGB2BGR)
 
         writer_proc.stdin.write(cropped.tobytes())
 
@@ -548,11 +661,14 @@ def crop_clip_local(
     """Cut + reframe one highlight, returning the local mp4 path."""
     cut_path = out_path + ".cut.mp4"
     word_captions = _get_word_captions(transcript_segments or [], start_time, end_time)
+    
+    from ..config import USE_REMOTION
+    
     try:
         _cut_subclip(source_path, start_time, end_time, cut_path)
-        if os.path.exists("shorts_renderer"):
+        if USE_REMOTION and os.path.exists("shorts_renderer"):
             clean_cropped_path = out_path + ".clean.mp4"
-            _reframe_vertical(cut_path, clean_cropped_path, aspect_ratio, start_time, word_captions, draw_subtitles=False)
+            _reframe_vertical(cut_path, clean_cropped_path, aspect_ratio, start_time, word_captions, draw_subtitles=False, title=title)
             
             duration_sec = end_time - start_time
             fps = 30.0
@@ -566,7 +682,7 @@ def crop_clip_local(
             if os.path.exists(clean_cropped_path):
                 os.remove(clean_cropped_path)
         else:
-            _reframe_vertical(cut_path, out_path, aspect_ratio, start_time, word_captions)
+            _reframe_vertical(cut_path, out_path, aspect_ratio, start_time, word_captions, draw_subtitles=True, title=title)
     finally:
         if os.path.exists(cut_path):
             os.remove(cut_path)

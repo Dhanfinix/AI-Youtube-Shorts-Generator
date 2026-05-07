@@ -35,6 +35,8 @@ if not LOCAL_LLM_PROVIDER:
 LOCAL_WHISPER_MODEL = os.getenv("LOCAL_WHISPER_MODEL", "base")
 LOCAL_WHISPER_DEVICE = os.getenv("LOCAL_WHISPER_DEVICE", "auto")  # auto / cpu / cuda
 LOCAL_OUTPUT_DIR = os.getenv("LOCAL_OUTPUT_DIR", "output")
+USE_REMOTION = os.getenv("USE_REMOTION", "false").lower() == "true"
+
 
 
 def require_api_key() -> str:
