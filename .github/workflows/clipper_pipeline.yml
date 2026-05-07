@@ -10,6 +10,8 @@ on:
 jobs:
   process-clips:
     runs-on: ubuntu-latest
+    env:
+      ENABLE_TOR_PROXY: ${{ secrets.ENABLE_TOR_PROXY || 'false' }}
 
     steps:
       - name: Checkout repository
@@ -25,6 +27,7 @@ jobs:
         uses: FedericoCarboni/setup-ffmpeg@v3
 
       - name: Install and Start Tor Service
+        if: ${{ env.ENABLE_TOR_PROXY == 'true' }}
         run: |
           sudo apt-get update
           sudo apt-get install -y tor
@@ -48,5 +51,10 @@ jobs:
           LOCAL_TARGET_LANGUAGE: ${{ secrets.LOCAL_TARGET_LANGUAGE || 'auto' }}
           YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
           YOUTUBE_COOKIES_BASE64: ${{ secrets.YOUTUBE_COOKIES_BASE64 }}
+          ENABLE_TOR_PROXY: ${{ secrets.ENABLE_TOR_PROXY || 'false' }}
+          YOUTUBE_PROXY: ${{ secrets.YOUTUBE_PROXY }}
+          YT_DLP_PLAYER_CLIENTS: ${{ secrets.YT_DLP_PLAYER_CLIENTS || 'web,mweb,android' }}
+          YOUTUBE_PO_TOKEN: ${{ secrets.YOUTUBE_PO_TOKEN }}
+          YOUTUBE_VISITOR_DATA: ${{ secrets.YOUTUBE_VISITOR_DATA }}
         run: |
           python automation.py

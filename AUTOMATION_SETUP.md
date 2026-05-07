@@ -71,6 +71,13 @@ Agar GitHub Actions dapat berjalan otomatis tanpa membocorkan kunci rahasia Anda
 | **`GOOGLE_SHEET_NAME`** | *(Opsional)* Nama Google Sheet Anda (Default: `YtClipper_Jobs`). |
 | **`YOUTUBE_COOKIES`** | *(Sangat Direkomendasikan)* Tempelkan seluruh teks mentah dari berkas `cookies.txt` Anda langsung di sini (tanpa konversi apa pun). |
 | **`YOUTUBE_COOKIES_BASE64`** | *(Alternatif)* Berkas cookies YouTube yang telah dikonversi ke format Base64. |
+| **`ENABLE_TOR_PROXY`** | *(Opsional)* Isi `true` hanya kalau Anda memang ingin download lewat Tor. Default `false`, karena YouTube sering menandai IP Tor/CI sebagai bot meski cookies valid. |
+| **`YOUTUBE_PROXY`** | *(Opsional)* Proxy eksplisit untuk download, misalnya `socks5://host:port` atau `http://host:port`. |
+| **`YT_DLP_PLAYER_CLIENTS`** | *(Opsional)* Daftar client yt-dlp, default `web,mweb,android`. |
+| **`YOUTUBE_PO_TOKEN`** / **`YOUTUBE_VISITOR_DATA`** | *(Opsional lanjutan)* Token YouTube proof-of-origin jika akun/cookies tetap terkena validasi bot. |
+
+> [!TIP]
+> Untuk YouTube, jalur paling stabil biasanya cookies Netscape terbaru dari browser yang benar-benar login, tanpa Tor. Kalau Anda memakai ekstensi export cookies, pilih format `cookies.txt` / Netscape dan refresh secret secara berkala karena cookies bisa kedaluwarsa.
 
 ---
 

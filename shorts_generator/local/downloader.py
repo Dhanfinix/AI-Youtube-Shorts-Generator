@@ -9,6 +9,21 @@ from typing import Optional
 from ..config import LOCAL_OUTPUT_DIR
 
 
+YOUTUBE_AUTH_COOKIE_NAMES = {
+    "SID",
+    "HSID",
+    "SSID",
+    "APISID",
+    "SAPISID",
+    "__Secure-1PSID",
+    "__Secure-1PAPISID",
+    "__Secure-1PSIDTS",
+    "__Secure-3PSID",
+    "__Secure-3PAPISID",
+    "__Secure-3PSIDTS",
+}
+
+
 def _import_ytdlp():
     try:
         import yt_dlp  # type: ignore
@@ -32,13 +47,114 @@ def _format_for(fmt: str) -> str:
     )
 
 
-def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[str] = None) -> str:
-    """Download to disk and return the local mp4 path."""
-    out_dir = out_dir or LOCAL_OUTPUT_DIR
-    os.makedirs(out_dir, exist_ok=True)
+def _env_truthy(name: str) -> bool:
+    return (os.getenv(name) or "").strip().lower() in {"1", "true", "yes", "on"}
 
-    # Detect if Tor proxy is available on port 9050
+
+def _normalize_cookie_text(raw: str) -> str:
+    """Accept raw Netscape cookies or secrets pasted with literal "\\n" escapes."""
+    text = raw.strip()
+    if "\\n" in text and "\n" not in text:
+        text = text.replace("\\r\\n", "\n").replace("\\n", "\n")
+    if "\t" not in text and "\\t" in text:
+        text = text.replace("\\t", "\t")
+    return text.rstrip() + "\n"
+
+
+def _cookie_auth_summary(cookie_path: str) -> tuple[int, int]:
+    youtube_rows = 0
+    auth_rows = 0
+    try:
+        with open(cookie_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("# Netscape"):
+                    continue
+                if line.startswith("#HttpOnly_"):
+                    line = line[len("#HttpOnly_") :]
+                parts = line.split("\t")
+                if len(parts) < 7:
+                    continue
+                domain = parts[0].lower()
+                name = parts[5]
+                if "youtube.com" in domain or "google.com" in domain:
+                    youtube_rows += 1
+                    if name in YOUTUBE_AUTH_COOKIE_NAMES:
+                        auth_rows += 1
+    except OSError:
+        pass
+    return youtube_rows, auth_rows
+
+
+def _write_cookie_secret(out_dir: str, value: str, source: str) -> Optional[str]:
+    cookie_path = os.path.join(out_dir, "youtube_cookies_temp.txt")
+    with open(cookie_path, "w", encoding="utf-8") as f:
+        f.write(_normalize_cookie_text(value))
+
+    youtube_rows, auth_rows = _cookie_auth_summary(cookie_path)
+    if youtube_rows == 0:
+        print(
+            f"[download/local] {source} was written, but it does not look like a Netscape YouTube cookies file.",
+            flush=True,
+        )
+    elif auth_rows == 0:
+        print(
+            f"[download/local] {source} has {youtube_rows} YouTube/Google cookie rows but no obvious login cookies.",
+            flush=True,
+        )
+    else:
+        print(
+            f"[download/local] {source} loaded ({youtube_rows} YouTube/Google rows, {auth_rows} auth rows).",
+            flush=True,
+        )
+    return cookie_path
+
+
+def _load_cookiefile(out_dir: str) -> Optional[str]:
+    cookies_env = os.getenv("YOUTUBE_COOKIES")
+    cookies_b64_env = os.getenv("YOUTUBE_COOKIES_BASE64")
+    cookies_file_env = os.getenv("YOUTUBE_COOKIES_FILE")
+
+    if cookies_b64_env:
+        import base64
+
+        try:
+            decoded = base64.b64decode(cookies_b64_env).decode("utf-8")
+        except Exception as e:
+            print(f"[download/local] Error decoding YOUTUBE_COOKIES_BASE64: {e}", flush=True)
+        else:
+            return _write_cookie_secret(out_dir, decoded, "YOUTUBE_COOKIES_BASE64")
+
+    if cookies_env:
+        return _write_cookie_secret(out_dir, cookies_env, "YOUTUBE_COOKIES")
+
+    if cookies_file_env:
+        if os.path.exists(cookies_file_env):
+            print(f"[download/local] Using cookies file from YOUTUBE_COOKIES_FILE: {cookies_file_env}", flush=True)
+            return cookies_file_env
+        print(f"[download/local] YOUTUBE_COOKIES_FILE does not exist: {cookies_file_env}", flush=True)
+
+    for name in ("cookies.txt", "youtube_cookies.txt"):
+        possible_paths = [
+            name,
+            os.path.join(os.getcwd(), name),
+            os.path.abspath(name),
+        ]
+        for p in possible_paths:
+            if os.path.exists(p):
+                print(f"[download/local] Using local cookies file: {p}", flush=True)
+                return p
+    return None
+
+
+def _proxy_config() -> tuple[Optional[str], Optional[dict]]:
+    explicit_proxy = os.getenv("YOUTUBE_PROXY") or os.getenv("DOWNLOAD_PROXY")
+    if explicit_proxy:
+        print(f"[download/local] Using explicit proxy from environment: {explicit_proxy}", flush=True)
+        return explicit_proxy, {"http": explicit_proxy, "https": explicit_proxy}
+
     import socket
+
     tor_available = False
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.settimeout(1)
@@ -49,14 +165,39 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
         pass
     finally:
         s.close()
-        
-    req_proxies = None
+
+    if tor_available and _env_truthy("ENABLE_TOR_PROXY"):
+        proxy = "socks5://127.0.0.1:9050"
+        print("[download/local] Tor proxy enabled via ENABLE_TOR_PROXY=true.", flush=True)
+        return proxy, {"http": proxy, "https": proxy}
     if tor_available:
-        print("[download/local] Tor proxy detected on 127.0.0.1:9050! Enabling anonymous routing.", flush=True)
-        req_proxies = {
-            "http": "socks5://127.0.0.1:9050",
-            "https": "socks5://127.0.0.1:9050"
-        }
+        print("[download/local] Tor is available on 127.0.0.1:9050, but it is disabled. Set ENABLE_TOR_PROXY=true to use it.", flush=True)
+    return None, None
+
+
+def _youtube_extractor_args() -> dict:
+    player_clients = [
+        item.strip()
+        for item in (os.getenv("YT_DLP_PLAYER_CLIENTS") or "web,mweb,android").split(",")
+        if item.strip()
+    ]
+    args = {"player_client": player_clients}
+
+    po_token = os.getenv("YOUTUBE_PO_TOKEN") or os.getenv("YT_DLP_PO_TOKEN")
+    visitor_data = os.getenv("YOUTUBE_VISITOR_DATA") or os.getenv("YT_DLP_VISITOR_DATA")
+    if po_token:
+        args["po_token"] = [po_token]
+    if visitor_data:
+        args["visitor_data"] = [visitor_data]
+    return {"youtube": args}
+
+
+def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[str] = None) -> str:
+    """Download to disk and return the local mp4 path."""
+    out_dir = out_dir or LOCAL_OUTPUT_DIR
+    os.makedirs(out_dir, exist_ok=True)
+
+    ytdlp_proxy, req_proxies = _proxy_config()
 
     # 1. Check if the URL is a Google Drive link or direct MP4 link
     if "drive.google.com" in video_url or video_url.split("?")[0].endswith(".mp4"):
@@ -91,47 +232,26 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,
+        "retries": 3,
+        "fragment_retries": 3,
+        "extractor_retries": 3,
+        "sleep_interval_requests": 1,
+        "extractor_args": _youtube_extractor_args(),
+        "http_headers": {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
+            "Accept-Language": "en-US,en;q=0.9",
+        },
     }
-    if tor_available:
-        ydl_opts["proxy"] = "socks5://127.0.0.1:9050"
+    if ytdlp_proxy:
+        ydl_opts["proxy"] = ytdlp_proxy
 
-    # Automatically load cookies if present in environment or local files
-    cookies_env = os.getenv("YOUTUBE_COOKIES")
-    cookies_b64_env = os.getenv("YOUTUBE_COOKIES_BASE64")
-    
-    if cookies_env:
-        cookie_path = os.path.join(out_dir, "youtube_cookies_temp.txt")
-        with open(cookie_path, "w", encoding="utf-8") as f:
-            f.write(cookies_env)
+    cookie_path = _load_cookiefile(out_dir)
+    if cookie_path:
         ydl_opts["cookiefile"] = cookie_path
-        print("[download/local] Using cookies loaded from YOUTUBE_COOKIES environment variable.", flush=True)
-    elif cookies_b64_env:
-        import base64
-        cookie_path = os.path.join(out_dir, "youtube_cookies_temp.txt")
-        try:
-            decoded = base64.b64decode(cookies_b64_env).decode("utf-8")
-            with open(cookie_path, "w", encoding="utf-8") as f:
-                f.write(decoded)
-            ydl_opts["cookiefile"] = cookie_path
-            print("[download/local] Using cookies decoded from YOUTUBE_COOKIES_BASE64 environment variable.", flush=True)
-        except Exception as e:
-            print(f"[download/local] Error decoding YOUTUBE_COOKIES_BASE64: {e}", flush=True)
-    else:
-        for name in ("cookies.txt", "youtube_cookies.txt"):
-            possible_paths = [
-                name,
-                os.path.join(os.getcwd(), name),
-                os.path.abspath(name),
-            ]
-            found_path = None
-            for p in possible_paths:
-                if os.path.exists(p):
-                    found_path = p
-                    break
-            if found_path:
-                ydl_opts["cookiefile"] = found_path
-                print(f"[download/local] Using local cookies file: {found_path}", flush=True)
-                break
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -198,7 +318,7 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
                             "Accept": "application/json",
                             "Content-Type": "application/json"
                         }
-                        res = requests.post(cobalt_url, json=payload, headers=headers, timeout=15)
+                        res = requests.post(cobalt_url, json=payload, headers=headers, proxies=req_proxies, timeout=15)
                         if res.status_code == 200:
                             data = res.json()
                             if data.get("status") == "redirect" or data.get("status") == "stream":
@@ -218,7 +338,7 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
                     path = os.path.join(out_dir, out_filename)
                     
                     print(f"[download/local] Downloading direct MP4 from Cobalt API to {path}...", flush=True)
-                    with requests.get(download_url, stream=True, timeout=60) as r:
+                    with requests.get(download_url, proxies=req_proxies, stream=True, timeout=60) as r:
                         r.raise_for_status()
                         with open(path, 'wb') as f:
                             for chunk in r.iter_content(chunk_size=8192):
@@ -236,7 +356,11 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
                         video_id = video_url.split("youtu.be/")[1].split("?")[0]
                     
                     print("[download/local] Fetching active Invidious instances list (sorted by type and users)...", flush=True)
-                    inst_res = requests.get("https://api.invidious.io/instances.json?pretty=1&sort_by=type,users", timeout=10)
+                    inst_res = requests.get(
+                        "https://api.invidious.io/instances.json?pretty=1&sort_by=type,users",
+                        proxies=req_proxies,
+                        timeout=10,
+                    )
                     instances_data = inst_res.json()
                     
                     instances = []
@@ -262,7 +386,7 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
                                 test_url = f"{instance}/latest_version?id={video_id}&itag={itag}&local=true"
                                 print(f"[download/local] Trying Invidious proxied stream: {test_url}...", flush=True)
                                 try:
-                                    res = requests.get(test_url, headers=req_headers, stream=True, timeout=10)
+                                    res = requests.get(test_url, headers=req_headers, proxies=req_proxies, stream=True, timeout=10)
                                     if res.status_code == 200:
                                         download_url = test_url
                                         selected_instance = instance
@@ -275,7 +399,7 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
                             # Option 2: Fallback to querying Invidious API
                             print(f"[download/local] Querying Invidious instance API: {instance}...", flush=True)
                             api_url = f"{instance}/api/v1/videos/{video_id}"
-                            res = requests.get(api_url, headers=req_headers, timeout=10)
+                            res = requests.get(api_url, headers=req_headers, proxies=req_proxies, timeout=10)
                             if res.status_code == 200:
                                 data = res.json()
                                 streams = data.get("formatStreams", [])
@@ -303,7 +427,7 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
                         out_filename = f"source_{video_id}.mp4"
                         path = os.path.join(out_dir, out_filename)
                         print(f"[download/local] Downloading direct MP4 from Invidious instance ({selected_instance}) to {path}...", flush=True)
-                        with requests.get(download_url, headers=req_headers, stream=True, timeout=90) as r:
+                        with requests.get(download_url, headers=req_headers, proxies=req_proxies, stream=True, timeout=90) as r:
                             r.raise_for_status()
                             with open(path, 'wb') as f:
                                 for chunk in r.iter_content(chunk_size=8192):
