@@ -37,6 +37,27 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
     out_dir = out_dir or LOCAL_OUTPUT_DIR
     os.makedirs(out_dir, exist_ok=True)
 
+    # Detect if Tor proxy is available on port 9050
+    import socket
+    tor_available = False
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(1)
+    try:
+        s.connect(("127.0.0.1", 9050))
+        tor_available = True
+    except Exception:
+        pass
+    finally:
+        s.close()
+        
+    req_proxies = None
+    if tor_available:
+        print("[download/local] Tor proxy detected on 127.0.0.1:9050! Enabling anonymous routing.", flush=True)
+        req_proxies = {
+            "http": "socks5://127.0.0.1:9050",
+            "https": "socks5://127.0.0.1:9050"
+        }
+
     # 1. Check if the URL is a Google Drive link or direct MP4 link
     if "drive.google.com" in video_url or video_url.split("?")[0].endswith(".mp4"):
         file_id = "direct_video"
@@ -53,7 +74,7 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
         
         import requests
         print(f"[download/local] Direct file/Drive link detected, downloading to {path}...", flush=True)
-        with requests.get(download_url, stream=True, timeout=60) as r:
+        with requests.get(download_url, proxies=req_proxies, stream=True, timeout=60) as r:
             r.raise_for_status()
             with open(path, 'wb') as f:
                 for chunk in r.iter_content(chunk_size=8192):
@@ -71,6 +92,8 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
         "no_warnings": True,
         "noprogress": True,
     }
+    if tor_available:
+        ydl_opts["proxy"] = "socks5://127.0.0.1:9050"
 
     # Automatically load cookies if present in environment or local files
     cookies_env = os.getenv("YOUTUBE_COOKIES")
@@ -175,7 +198,7 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
                             "Accept": "application/json",
                             "Content-Type": "application/json"
                         }
-                        res = requests.post(cobalt_url, json=payload, headers=headers, timeout=15)
+                        res = requests.post(cobalt_url, json=payload, headers=headers, proxies=req_proxies, timeout=15)
                         if res.status_code == 200:
                             data = res.json()
                             if data.get("status") == "redirect" or data.get("status") == "stream":
@@ -195,7 +218,7 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
                     path = os.path.join(out_dir, out_filename)
                     
                     print(f"[download/local] Downloading direct MP4 from Cobalt API to {path}...", flush=True)
-                    with requests.get(download_url, stream=True, timeout=60) as r:
+                    with requests.get(download_url, proxies=req_proxies, stream=True, timeout=60) as r:
                         r.raise_for_status()
                         with open(path, 'wb') as f:
                             for chunk in r.iter_content(chunk_size=8192):
@@ -213,7 +236,7 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
                         video_id = video_url.split("youtu.be/")[1].split("?")[0]
                     
                     print("[download/local] Fetching active Invidious instances list (sorted by type and users)...", flush=True)
-                    inst_res = requests.get("https://api.invidious.io/instances.json?pretty=1&sort_by=type,users", timeout=10)
+                    inst_res = requests.get("https://api.invidious.io/instances.json?pretty=1&sort_by=type,users", proxies=req_proxies, timeout=10)
                     instances_data = inst_res.json()
                     
                     instances = []
@@ -236,7 +259,7 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
                         try:
                             print(f"[download/local] Querying Invidious instance: {instance}...", flush=True)
                             api_url = f"{instance}/api/v1/videos/{video_id}"
-                            res = requests.get(api_url, headers=req_headers, timeout=10)
+                            res = requests.get(api_url, headers=req_headers, proxies=req_proxies, timeout=10)
                             if res.status_code == 200:
                                 data = res.json()
                                 streams = data.get("formatStreams", [])
@@ -261,7 +284,7 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
                         out_filename = f"source_{video_id}.mp4"
                         path = os.path.join(out_dir, out_filename)
                         print(f"[download/local] Downloading direct MP4 from Invidious instance ({selected_instance}) to {path}...", flush=True)
-                        with requests.get(download_url, headers=req_headers, stream=True, timeout=90) as r:
+                        with requests.get(download_url, headers=req_headers, proxies=req_proxies, stream=True, timeout=90) as r:
                             r.raise_for_status()
                             with open(path, 'wb') as f:
                                 for chunk in r.iter_content(chunk_size=8192):

@@ -24,12 +24,18 @@ jobs:
       - name: Set up FFmpeg
         uses: FedericoCarboni/setup-ffmpeg@v3
 
+      - name: Install and Start Tor Service
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tor
+          sudo service tor start
+
       - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -r requirements-local.txt
-          pip install -U yt-dlp pytubefix
+          pip install -U yt-dlp pytubefix pysocks
 
       - name: Run Automation Pipeline
         env:
