@@ -124,9 +124,79 @@ def _ema_with_motion_limits(
     return smoothed
 
 
-def _detect_faces(frame, cv2, face_cascade) -> List[Dict]:
-    """Return OpenCV Haar face boxes as {x, y, w, h, score}."""
+def _ema_with_motion_limits_hybrid(
+    values: Sequence[float],
+    focus_ids: Sequence[int],
+    start_value: float,
+    fps: float,
+    max_pixels_per_second: float,
+) -> List[float]:
+    """Smooth within the same speaker but snap instantly when switching speakers."""
+    if not values:
+        return []
+
+    max_step = max(1.0, max_pixels_per_second / max(1.0, fps))
+    smoothed = []
+    current = start_value
+    last_id = focus_ids[0] if len(focus_ids) > 0 else 0
+    for i, target in enumerate(values):
+        curr_id = focus_ids[i] if i < len(focus_ids) else last_id
+        if curr_id != last_id:
+            current = target
+            last_id = curr_id
+        
+        delta = target - current
+        step = _clamp(delta * 0.12, -max_step, max_step)
+        current += step
+        smoothed.append(current)
+    return smoothed
+
+
+def _detect_faces(frame, cv2, face_cascade, detector_name="opencv-haar") -> List[Dict]:
+    """Return face boxes using MediaPipe if specified, defaulting to Haar Cascade."""
     faces: List[Dict] = []
+    if detector_name == "mediapipe":
+        try:
+            import mediapipe as mp
+            # Cache the MediaPipe detector on the function to avoid re-initializing it every frame
+            if not hasattr(_detect_faces, "mp_detector"):
+                _detect_faces.mp_detector = mp.solutions.face_detection.FaceDetection(
+                    model_selection=1, min_detection_confidence=0.5
+                )
+            
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            results = _detect_faces.mp_detector.process(rgb)
+            if results.detections:
+                h_img, w_img, _ = frame.shape
+                for detection in results.detections:
+                    bbox = detection.location_data.relative_bounding_box
+                    x = int(bbox.xmin * w_img)
+                    y = int(bbox.ymin * h_img)
+                    w = int(bbox.width * w_img)
+                    h = int(bbox.height * h_img)
+                    score = float(detection.score[0]) if detection.score else 0.7
+                    
+                    keypoints = detection.location_data.relative_keypoints
+                    nose_y = None
+                    mouth_y = None
+                    if keypoints and len(keypoints) >= 4:
+                        nose_y = float(keypoints[2].y * h_img)
+                        mouth_y = float(keypoints[3].y * h_img)
+                    
+                    faces.append({
+                        "x": x,
+                        "y": y,
+                        "w": w,
+                        "h": h,
+                        "score": score,
+                        "nose_y": nose_y,
+                        "mouth_y": mouth_y
+                    })
+                return faces
+        except Exception:
+            pass
+
+    # OpenCV Haar Fallback
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     detected = face_cascade.detectMultiScale(
         gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60)
@@ -150,7 +220,14 @@ def _build_focus_trajectory(
     if total_frames <= 0:
         return []
 
-    detector_name = "opencv-haar"
+    from shorts_generator.config import LOCAL_FACE_DETECTOR
+    detector_name = LOCAL_FACE_DETECTOR
+    if detector_name == "mediapipe":
+        try:
+            import mediapipe as mp
+        except ImportError:
+            detector_name = "opencv-haar"
+
     detect_every_n = max(2, int(round(fps / 6.0)))
     max_match_distance = max(crop_w * 0.45, src_w * 0.12)
     sample_frames = list(range(0, total_frames, detect_every_n))
@@ -161,7 +238,7 @@ def _build_focus_trajectory(
         ret, frame = cap.read()
         if not ret:
             continue
-        faces = _detect_faces(frame, cv2, face_cascade)
+        faces = _detect_faces(frame, cv2, face_cascade, detector_name=detector_name)
         detections = []
         for face in faces:
             area = float(face["w"] * face["h"])
@@ -169,7 +246,31 @@ def _build_focus_trajectory(
                 continue
             cx = float(face["x"] + face["w"] / 2.0)
             cy = float(face["y"] + face["h"] / 2.0)
-            detections.append({**face, "frame": frame_idx, "cx": cx, "cy": cy, "area": area})
+            
+            # Extract mouth sub-image from lower-center part of the face box
+            h_f, w_f, _ = frame.shape
+            my0 = max(0, min(h_f - 1, int(face["y"] + face["h"] * 0.65)))
+            my1 = max(0, min(h_f - 1, int(face["y"] + face["h"] * 0.90)))
+            mx0 = max(0, min(w_f - 1, int(face["x"] + face["w"] * 0.25)))
+            mx1 = max(0, min(w_f - 1, int(face["x"] + face["w"] * 0.75)))
+            
+            mouth_norm = None
+            if (my1 > my0) and (mx1 > mx0):
+                try:
+                    mouth_sub = frame[my0:my1, mx0:mx1]
+                    mouth_gray = cv2.cvtColor(mouth_sub, cv2.COLOR_BGR2GRAY)
+                    mouth_norm = cv2.resize(mouth_gray, (40, 20))
+                except Exception:
+                    pass
+            
+            detections.append({
+                **face,
+                "frame": frame_idx,
+                "cx": cx,
+                "cy": cy,
+                "area": area,
+                "mouth_norm": mouth_norm
+            })
 
         used_tracks = set()
         for det in sorted(detections, key=lambda d: d["area"], reverse=True):
@@ -189,9 +290,20 @@ def _build_focus_trajectory(
                     best_distance = distance
 
             if best_idx is None:
+                det["mouth_diff"] = 0.0
                 tracks.append({"detections": [det]})
                 used_tracks.add(len(tracks) - 1)
             else:
+                last_det = tracks[best_idx]["detections"][-1]
+                mouth_diff = 0.0
+                if det.get("mouth_norm") is not None and last_det.get("mouth_norm") is not None:
+                    try:
+                        import numpy as np
+                        diff_img = cv2.absdiff(det["mouth_norm"], last_det["mouth_norm"])
+                        mouth_diff = float(np.mean(diff_img))
+                    except Exception:
+                        pass
+                det["mouth_diff"] = mouth_diff
                 tracks[best_idx]["detections"].append(det)
                 used_tracks.add(best_idx)
 
@@ -216,62 +328,125 @@ def _build_focus_trajectory(
         return coverage * 3.0 + (avg_area / max(1.0, src_w * src_h)) * 18.0 + centrality * 0.35 + stability * 0.4
 
     ranked_tracks = sorted(tracks, key=track_score, reverse=True)
+    # Filter out fleeting noise tracks (at least 3 detections required)
+    high_quality_tracks = [t for t in ranked_tracks if len(t["detections"]) >= 3]
+    if high_quality_tracks:
+        ranked_tracks = high_quality_tracks
+        
     primary = ranked_tracks[0]
     primary_detections = primary["detections"]
 
-    # If two persistent faces fit inside the vertical crop, frame them as a group.
-    group_tracks = [primary]
-    if len(ranked_tracks) > 1:
-        primary_frames = {d["frame"] for d in primary_detections}
-        for candidate in ranked_tracks[1:3]:
-            cand_detections = candidate["detections"]
-            cand_frames = {d["frame"] for d in cand_detections}
-            overlap_ratio = len(primary_frames & cand_frames) / max(1, min(len(primary_frames), len(cand_frames)))
-            if overlap_ratio < 0.55:
-                continue
-            primary_avg_x = sum(d["cx"] for d in primary_detections) / len(primary_detections)
-            cand_avg_x = sum(d["cx"] for d in cand_detections) / len(cand_detections)
-            if abs(primary_avg_x - cand_avg_x) <= crop_w * 0.72:
-                group_tracks.append(candidate)
-
     keyframes: Dict[int, float] = {}
-    if len(group_tracks) > 1:
-        by_frame: Dict[int, List[Dict]] = {}
-        for track in group_tracks:
-            for det in track["detections"]:
-                by_frame.setdefault(det["frame"], []).append(det)
-        for frame_idx, detections in by_frame.items():
-            min_x = min(d["x"] for d in detections)
-            max_x = max(d["x"] + d["w"] for d in detections)
-            center = (min_x + max_x) / 2.0
-            keyframes[frame_idx] = _clamp(center, min_center, max_center)
-        mode_note = f"group({len(group_tracks)})"
+    keyframes_focus_id: Dict[int, int] = {}
+    mode_note = "single"
+
+    # Active Speaker Detection if multiple faces are found
+    if len(ranked_tracks) > 1:
+        current_focus_idx = 0
+        last_switch_frame = -100
+        min_switch_interval = int(fps * 2.0)  # Hold focus on a speaker for at least 2.0s to avoid dizzying cuts
+        
+        for frame_idx in sample_frames:
+            active_tracks_at_frame = []
+            for ti, track in enumerate(ranked_tracks[:3]):  # Check top 3 tracks
+                has_det = any(abs(d["frame"] - frame_idx) <= detect_every_n * 2 for d in track["detections"])
+                if has_det:
+                    # Collect mouth temporal differences around this frame (+/- 1.5s)
+                    window = [
+                        d["mouth_diff"]
+                        for d in track["detections"]
+                        if abs(d["frame"] - frame_idx) <= int(fps * 1.5) and d.get("mouth_diff") is not None
+                    ]
+                    # The mean of mouth temporal differences represents the intensity of speaking activity
+                    mean_val = sum(window) / len(window) if len(window) >= 1 else 0.0
+                    # The standard deviation of the window represents dynamic fluctuation (dynamic lip movement!)
+                    if len(window) >= 2:
+                        import math
+                        variance = sum((x - mean_val) ** 2 for x in window) / len(window)
+                        std_val = math.sqrt(variance)
+                    else:
+                        std_val = 0.0
+                    
+                    # Combine mean intensity and dynamic fluctuation to isolate true speech/lip movement
+                    score = mean_val * (1.0 + 1.8 * std_val)
+                    active_tracks_at_frame.append((ti, score))
+            
+            if active_tracks_at_frame:
+                best_ti, best_score = max(active_tracks_at_frame, key=lambda x: x[1])
+                # Ensure the prospective switch target has an actual face detection near this frame
+                track_has_recent_face = any(abs(d["frame"] - frame_idx) <= int(fps * 1.5) for d in ranked_tracks[best_ti]["detections"])
+                # If dynamic speaking activity is significant and different, switch focus safely
+                if track_has_recent_face and best_score > 1.3 and best_ti != current_focus_idx:
+                    if frame_idx - last_switch_frame >= min_switch_interval:
+                        current_focus_idx = best_ti
+                        last_switch_frame = frame_idx
+            
+            # Use the focus coordinate of the active speaking track with a robust temporal fallback
+            focus_track = ranked_tracks[current_focus_idx]
+            # Limit search to detections within +/- 1.0 seconds to prevent pulling positions from other scenes
+            valid_dets = [d for d in focus_track["detections"] if abs(d["frame"] - frame_idx) <= int(fps * 1.0)]
+            if valid_dets:
+                closest_det = min(valid_dets, key=lambda d: abs(d["frame"] - frame_idx))
+                target_cx = closest_det["cx"]
+            else:
+                # Fallback: Look for ANY face detected on or very close (+/- 0.5s) to the current frame across all tracks
+                local_dets = []
+                for track in ranked_tracks:
+                    local_dets.extend([
+                        d for d in track["detections"]
+                        if abs(d["frame"] - frame_idx) <= int(fps * 0.5)
+                    ])
+                if local_dets:
+                    closest_local_det = min(local_dets, key=lambda d: abs(d["frame"] - frame_idx))
+                    target_cx = closest_local_det["cx"]
+                else:
+                    # Absolute fallback: default center of the video
+                    target_cx = default_center
+
+            keyframes[frame_idx] = _clamp(target_cx, min_center, max_center)
+            keyframes_focus_id[frame_idx] = current_focus_idx
+            
+        mode_note = "active-speaker"
     else:
         for det in primary_detections:
             keyframes[det["frame"]] = _clamp(det["cx"], min_center, max_center)
+            keyframes_focus_id[det["frame"]] = 0
         mode_note = "single"
 
     sorted_keys = sorted(keyframes)
     raw = [default_center] * total_frames
+    focus_ids = [0] * total_frames
     first_key = sorted_keys[0]
     for i in range(0, min(first_key, total_frames)):
         raw[i] = keyframes[first_key]
+        focus_ids[i] = keyframes_focus_id.get(first_key, 0)
+        
     for left, right in zip(sorted_keys, sorted_keys[1:]):
         left_v = keyframes[left]
         right_v = keyframes[right]
+        left_id = keyframes_focus_id.get(left, 0)
+        right_id = keyframes_focus_id.get(right, 0)
         span = max(1, right - left)
         for i in range(left, min(right + 1, total_frames)):
             t = (i - left) / span
-            raw[i] = left_v + (right_v - left_v) * t
+            # Hybrid speaker-aware interpolation:
+            # Smooth linearly within the SAME speaker; cut/snap instantly across different speakers
+            if left_id == right_id:
+                raw[i] = left_v + (right_v - left_v) * t
+                focus_ids[i] = left_id
+            else:
+                raw[i] = left_v if i < right else right_v
+                focus_ids[i] = left_id if i < right else right_id
     last_key = sorted_keys[-1]
     for i in range(last_key, total_frames):
         raw[i] = keyframes[last_key]
+        focus_ids[i] = keyframes_focus_id.get(last_key, 0)
 
-    median_radius = max(1, int(round(fps * 0.35)))
-    medianed = _median_smooth(raw, median_radius)
-    smoothed = _ema_with_motion_limits(
-        medianed,
-        medianed[0],
+    # Smooth only within same speaker tracks to suppress micro-shakes
+    smoothed = _ema_with_motion_limits_hybrid(
+        raw,
+        focus_ids,
+        raw[0],
         fps=fps,
         max_pixels_per_second=max(80.0, crop_w * 0.85),
     )

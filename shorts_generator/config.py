@@ -38,6 +38,8 @@ LOCAL_TRANSCRIBER_PRIORITY = os.getenv("LOCAL_TRANSCRIBER_PRIORITY", "youtube").
 LOCAL_TARGET_LANGUAGE = os.getenv("LOCAL_TARGET_LANGUAGE", "auto").strip().lower()  # auto / id / en / etc.
 LOCAL_OUTPUT_DIR = os.getenv("LOCAL_OUTPUT_DIR", "output")
 USE_REMOTION = os.getenv("USE_REMOTION", "false").lower() == "true"
+LOCAL_FACE_DETECTOR = os.getenv("LOCAL_FACE_DETECTOR", "opencv-haar").strip().lower()  # opencv-haar / mediapipe
+
 
 
 
