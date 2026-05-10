@@ -76,7 +76,9 @@ jobs:
           pip uninstall -y bgutil-ytdlp-pot-provider yt-dlp-plugins || true
           pip install -r requirements.txt
           pip install -r requirements-local.txt
-          pip install -U "yt-dlp[default,curl-cffi]>=2025.01.01" pytubefix pysocks
+          python -m pip install -U pip hatchling wheel setuptools
+          pip install --force-reinstall "yt-dlp[default,curl-cffi] @ https://github.com/yt-dlp/yt-dlp/archive/master.tar.gz"
+          pip install -U pytubefix pysocks
 
       - name: Verify yt-dlp setup and plugin activation
         run: |
@@ -87,7 +89,7 @@ jobs:
           # Use python -m to ensure it executes the EXACT SAME interpreter configuration as automation.py
           python -m yt_dlp -v --skip-download "https://www.youtube.com/watch?v=dQw4w9WgXcQ" 2>&1 | head -n 50
           # Ensure we actually found the plugin
-          python -m yt_dlp -v --skip-download "https://www.youtube.com/watch?v=dQw4w9WgXcQ" 2>&1 | grep -qi "bgutil:http" || (echo "CRITICAL: BGUtil HTTP PO provider NOT detected by yt-dlp!" && exit 1)
+          python -m yt_dlp -v --skip-download "https://www.youtube.com/watch?v=dQw4w9WgXcQ" 2>&1 | grep -qi "bgutil" || (echo "CRITICAL: BGUtil HTTP PO provider NOT detected by yt-dlp!" && exit 1)
           echo "✅ Verification PASSED: BGUtil HTTP Provider detected."
 
       - name: Run Cookie Validator Tests

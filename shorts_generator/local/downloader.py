@@ -4,6 +4,8 @@ Returns a local mp4 path so the rest of the local pipeline can read it
 directly off disk.
 """
 import os
+# ARMAGEDDON FIX: Force exclude local requests from any environmental proxies
+os.environ["NO_PROXY"] = os.environ.get("NO_PROXY", "") + ",127.0.0.1,localhost"
 from typing import Optional
 
 from ..config import LOCAL_OUTPUT_DIR
@@ -250,9 +252,11 @@ def _youtube_extractor_args(player_clients_override: Optional[list] = None) -> d
 # ── Retry strategies: each entry is a list of player_client values to try ──
 # ── Fallback strategies ordered by maximum probability of success on datacenter IPs ──
 _FALLBACK_STRATEGIES = [
-    # Strategy 0: Standard 'web' client (THE ONLY ONE THAT NATIVELY MATCHES OUR PO TOKEN PROVIDER!)
+    # Strategy 0: Standard 'web' client (MATCHES OUR PO TOKEN PROVIDER!)
     ["web"],
-    # Strategy 1: TV client combined with web_creator
+    # Strategy 1: Mobile Web client (ALSO MATCHES TOKEN GENERATOR, HIGH SUCCESS RATIO!)
+    ["mweb"],
+    # Strategy 2: TV client combined with web_creator
     ["tv", "web_creator"],
     # Strategy 2: TV client alone
     ["tv"],
@@ -349,7 +353,7 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
         "retries": 3,
         "fragment_retries": 3,
         "extractor_retries": 3,
-        "sleep_interval_requests": 1,
+        "sleep_interval_requests": 3,  # Armageddon increase for safety
     }
 
     # CRITICAL 2026 UPGRADE: Fix the 2025+ Syntax Exception causing AssertionError
@@ -491,13 +495,14 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
             print(f"[download/local] ⚠️ Failed to connect to PO Token provider: {e}", flush=True)
 
         # Step 2: Launch armed client
-        print(f"[download/local] pytubefix: Initializing for {video_url}...", flush=True)
+        print(f"[download/local] pytubefix: Initializing for {video_url} (Armed with Proxies)...", flush=True)
         if use_po:
-            # CRITICAL: Explicitly set client='WEB' to match our token type
-            yt = YouTube(video_url, client='WEB', on_progress_callback=on_progress, use_po_token=True, token_file=token_file_path)
+            # CRITICAL: Explicitly set client='WEB' to match our token type AND supply proxy
+            yt = YouTube(video_url, client='WEB', on_progress_callback=on_progress, 
+                         use_po_token=True, token_file=token_file_path, proxies=req_proxies)
         else:
             # Fallback if provider was down
-            yt = YouTube(video_url, client='WEB', on_progress_callback=on_progress)
+            yt = YouTube(video_url, client='WEB', on_progress_callback=on_progress, proxies=req_proxies)
         
         # Step 3: Find stream and save
         stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
