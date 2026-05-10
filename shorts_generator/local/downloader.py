@@ -251,12 +251,12 @@ _FALLBACK_STRATEGIES = [
     ["web_creator"],
     # Strategy 2: default client (mweb / tv)
     ["default"],
-    # Strategy 3: web + web_creator
-    ["web", "web_creator"],
-    # Strategy 4: ios client (different bot-detection path)
+    # Strategy 3: ios client (reliable mobile API, doesn't trigger browser UI)
     ["ios"],
-    # Strategy 5: android_vr (least restricted historically)
+    # Strategy 4: android_vr (highly stable legacy API)
     ["android_vr"],
+    # Strategy 5: web + web_creator (LAST RESORT, can trigger slow browser engines)
+    ["web", "web_creator"],
 ]
 
 
