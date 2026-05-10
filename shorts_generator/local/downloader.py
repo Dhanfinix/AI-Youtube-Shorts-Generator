@@ -354,19 +354,39 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
     for idx, strategy in enumerate(_FALLBACK_STRATEGIES):
         clients_label = strategy or (os.getenv("YT_DLP_PLAYER_CLIENTS") or "web_creator,default")
         
-        # TRY EACH STRATEGY TWICE: Once with Cookies, Once WITHOUT Cookies (Pure PO Token)
-        for auth_idx, use_cookies in enumerate([True, False]):
-            auth_label = "WITH Cookies" if use_cookies else "ANONYMOUS (No Cookies)"
+        # TRY EACH STRATEGY THREE TIMES:
+        # 0: Standard Cookies
+        # 1: Anonymous
+        # 2: Anonymous + SKIP WEBPAGE (Forces direct InnerTube/API bypassing HTML gate)
+        for auth_idx in [0, 1, 2]:
+            if auth_idx == 0:
+                auth_label = "WITH Cookies"
+                use_cookies = True
+                skip_webpage = False
+            elif auth_idx == 1:
+                auth_label = "ANONYMOUS (No Cookies)"
+                use_cookies = False
+                skip_webpage = False
+            else:
+                auth_label = "ANONYMOUS + SKIP WEBPAGE (Direct API Bypass)"
+                use_cookies = False
+                skip_webpage = True
+
             print(f"[download/local] Strategy {idx}.{auth_idx}: player_client={clients_label} [{auth_label}]", flush=True)
 
             extractor_args = _youtube_extractor_args(player_clients_override=strategy)
+            if skip_webpage:
+                # Add nuclear skip flag to the extractor args
+                if "youtube" not in extractor_args:
+                    extractor_args["youtube"] = {}
+                extractor_args["youtube"]["player_skip"] = ["webpage"]
+
             ydl_opts = base_opts.copy()
             ydl_opts["extractor_args"] = extractor_args
             
             if not use_cookies:
                 ydl_opts.pop("cookiefile", None)
-                # Crucial optimization: When anonymous, ensure we enable PO Token specifically
-                # Our helper already does it, but we make sure here.
+                # Ensure we enforce PO token logic explicitly for total anonymous authority
 
             try:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
