@@ -136,6 +136,64 @@ def _load_cookiefile(out_dir: str) -> Optional[str]:
     return None
 
 
+def validate_youtube_cookies(out_dir: Optional[str] = None) -> tuple[bool, str]:
+    """Validate cookies file for physical expiration and structure.
+    
+    Returns:
+        (is_valid, status_message)
+    """
+    import time
+    from datetime import datetime
+
+    out_dir = out_dir or LOCAL_OUTPUT_DIR
+    cookie_path = _load_cookiefile(out_dir)
+    
+    if not cookie_path:
+        return False, "No YouTube cookies configured. (Missing cookies.txt, YOUTUBE_COOKIES, or YOUTUBE_COOKIES_FILE env)"
+        
+    auth_found = 0
+    expired_list = []
+    now = time.time()
+    
+    try:
+        with open(cookie_path, "r", encoding="utf-8") as f:
+            for line_num, line in enumerate(f, start=1):
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                # Remove potential prefix #HttpOnly_
+                if line.startswith("#HttpOnly_"):
+                     line = line[len("#HttpOnly_"):]
+                     
+                parts = line.split("\t")
+                if len(parts) < 7:
+                    continue
+                
+                name = parts[5]
+                try:
+                    expiration = float(parts[4])
+                except ValueError:
+                    expiration = 0
+                
+                if name in YOUTUBE_AUTH_COOKIE_NAMES:
+                    auth_found += 1
+                    # Non-zero timestamps indicate real expiry dates (0 often signifies session cookies)
+                    if expiration > 0 and expiration < now:
+                        readable_exp = datetime.fromtimestamp(expiration).strftime("%Y-%m-%d %H:%M:%S")
+                        expired_list.append(f"{name} (expired {readable_exp})")
+
+    except Exception as e:
+        return False, f"Error reading cookies file: {str(e)}"
+
+    if auth_found == 0:
+        return False, f"Cookies loaded from {cookie_path}, but no valid YouTube auth cookies (SID, HSID, etc.) found in it."
+
+    if expired_list:
+        return False, f"Expired cookies detected: {', '.join(expired_list)}. Please refresh your YouTube cookies."
+
+    return True, f"✅ YouTube cookies are VALID ({auth_found} auth components detected, none expired)."
+
+
 def _proxy_config() -> tuple[Optional[str], Optional[dict]]:
     explicit_proxy = os.getenv("YOUTUBE_PROXY") or os.getenv("DOWNLOAD_PROXY")
     if explicit_proxy:

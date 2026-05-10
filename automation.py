@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from shorts_generator import generate_shorts
+from shorts_generator.local.downloader import validate_youtube_cookies
 
 # Configuration from environment variables
 GOOGLE_SHEET_NAME = os.getenv("GOOGLE_SHEET_NAME", "YtClipper_Jobs")
@@ -94,7 +95,25 @@ def send_telegram_video(video_path: str, caption: str) -> bool:
 
 def process_automation():
     """Main execution block for pulling, running, and updating rows."""
-    print(f"[automation] Connecting to Google Sheet: '{GOOGLE_SHEET_NAME}'...", flush=True)
+    print("=" * 50, flush=True)
+    print("[automation] Checking YouTube environment conditions...", flush=True)
+    
+    # 0. Pre-check YouTube Cookies Validity
+    is_safe, msg = validate_youtube_cookies()
+    print(f"[automation] {msg}", flush=True)
+    
+    if not is_safe:
+        print("\n" + "!" * 50, flush=True)
+        print("[automation] CRITICAL: YouTube cookies are NOT SAFE to use.", flush=True)
+        print(f"[automation] REASON: {msg}", flush=True)
+        print("[automation] CANCELING pipeline execution to prevent IP banning or bot flagging.", flush=True)
+        print("!" * 50 + "\n", flush=True)
+        
+        # Optional: Optionally send simple telegram alert here if desired
+        # send_telegram_video(...) # not applicable for just warning text without a wrapper
+        sys.exit(1)
+
+    print("[automation] Everything looks clean. Connecting to Google Sheet: '{GOOGLE_SHEET_NAME}'...", flush=True)
     client = get_gspread_client()
     
     try:

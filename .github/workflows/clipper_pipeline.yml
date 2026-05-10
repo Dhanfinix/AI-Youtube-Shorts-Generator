@@ -53,6 +53,10 @@ jobs:
           echo "--- Installed PO Token Providers ---"
           yt-dlp -v --skip-download "https://www.youtube.com/watch?v=dQw4w9WgXcQ" 2>&1 | grep -i "pot\|getpot\|provider" || echo "No PO token providers detected"
 
+      - name: Run Cookie Validator Tests
+        run: |
+          python tests/test_cookie_validator.py
+
       - name: Run Automation Pipeline
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
