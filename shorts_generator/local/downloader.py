@@ -352,27 +352,36 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
     
     # Phase 1: Standard strategies
     for idx, strategy in enumerate(_FALLBACK_STRATEGIES):
-        extractor_args = _youtube_extractor_args(player_clients_override=strategy)
         clients_label = strategy or (os.getenv("YT_DLP_PLAYER_CLIENTS") or "web_creator,default")
-        print(f"[download/local] Strategy {idx}: player_client={clients_label}", flush=True)
+        
+        # TRY EACH STRATEGY TWICE: Once with Cookies, Once WITHOUT Cookies (Pure PO Token)
+        for auth_idx, use_cookies in enumerate([True, False]):
+            auth_label = "WITH Cookies" if use_cookies else "ANONYMOUS (No Cookies)"
+            print(f"[download/local] Strategy {idx}.{auth_idx}: player_client={clients_label} [{auth_label}]", flush=True)
 
-        ydl_opts = base_opts.copy()
-        ydl_opts["extractor_args"] = extractor_args
+            extractor_args = _youtube_extractor_args(player_clients_override=strategy)
+            ydl_opts = base_opts.copy()
+            ydl_opts["extractor_args"] = extractor_args
+            
+            if not use_cookies:
+                ydl_opts.pop("cookiefile", None)
+                # Crucial optimization: When anonymous, ensure we enable PO Token specifically
+                # Our helper already does it, but we make sure here.
 
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(video_url, download=True)
-                path = _resolve_output_path(ydl, info)
-            print(f"[download/local] ready: {path}", flush=True)
-            return path
-        except Exception as err:
-            import traceback
-            tb_str = traceback.format_exc()
-            all_errors.append(f"Strategy {idx} ({clients_label}) -> {type(err).__name__}: {err}")
-            print("\n" + "!" * 40, flush=True)
-            print(f"[download/local] CRITICAL ERROR IN STRATEGY {idx} ({clients_label}):", flush=True)
-            print(tb_str, flush=True)
-            print("!" * 40 + "\n", flush=True)
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(video_url, download=True)
+                    path = _resolve_output_path(ydl, info)
+                print(f"[download/local] Strategy {idx}.{auth_idx} SUCCEEDED! ready: {path}", flush=True)
+                return path
+            except Exception as err:
+                import traceback
+                tb_str = traceback.format_exc()
+                all_errors.append(f"Strategy {idx}.{auth_idx} ({clients_label} [{auth_label}]) -> {type(err).__name__}: {err}")
+                print("\n" + "!" * 40, flush=True)
+                print(f"[download/local] CRITICAL ERROR IN STRATEGY {idx}.{auth_idx} ({clients_label} [{auth_label}]):", flush=True)
+                print(tb_str, flush=True)
+                print("!" * 40 + "\n", flush=True)
 
     # Phase 2: Elite fallback using local browser cookies automatically
     print("[download/local] Standard strategies failed. Attempting fallback via local browser cookies...", flush=True)
