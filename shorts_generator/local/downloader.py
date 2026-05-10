@@ -234,7 +234,8 @@ def _youtube_extractor_args(player_clients_override: Optional[list] = None) -> d
         ]
     args = {
         "player_client": player_clients,
-        "youtubepot-providers": ["bgutil:http"]
+        # Modern 2025/2026 correct namespace configuration for BGUtil HTTP provider
+        "youtubepot-bgutilhttp": "base_url=http://127.0.0.1:4416"
     }
 
     po_token = os.getenv("YOUTUBE_PO_TOKEN") or os.getenv("YT_DLP_PO_TOKEN")
@@ -448,29 +449,66 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
             clean_err = str(berr).split("\n")[0]
             print(f"[download/local] '{browser}' extraction skipped/failed: {clean_err}", flush=True)
 
-    # Phase 3: NUCLEAR LIFEBOAT - Pytubefix Alternative Library
-    print("[download/local] ALL yt-dlp pathways EXHAUSTED. Deploying NUCLEAR LIFEBOAT: pytubefix...", flush=True)
+    # Phase 3: NUCLEAR LIFEBOAT - Pytubefix Alternative Library armed with local PO Token
+    print("[download/local] ALL yt-dlp pathways EXHAUSTED. Deploying ARMED NUCLEAR LIFEBOAT: pytubefix...", flush=True)
     try:
+        import requests
+        import json
         from pytubefix import YouTube
         from pytubefix.cli import on_progress
-        print(f"[download/local] pytubefix: Initializing for {video_url}...", flush=True)
-        yt = YouTube(video_url, on_progress_callback=on_progress)
+
+        # Step 1: Dynamically fetch fresh PO Token from the running local provider container
+        provider_url = "http://127.0.0.1:4416/get_pot"
+        token_file_path = os.path.join(out_dir, "pytubefix_tokens.json")
+        use_po = False
         
-        # Try finding standard format progressive mp4 at required resolution or lower
+        print(f"[download/local] Attempting manual PO Token extraction from {provider_url} for lifeboat...", flush=True)
+        try:
+            resp = requests.post(provider_url, json={}, timeout=10)
+            if resp.status_code == 200:
+                pot_data = resp.json()
+                po_token = pot_data.get("po_token")
+                visit_id = pot_data.get("visit_identifier")
+                
+                if po_token and visit_id:
+                    # Create required JSON file for pytubefix
+                    mapping = {
+                        "visitorData": visit_id,
+                        "po_token": po_token
+                    }
+                    with open(token_file_path, 'w') as f:
+                        json.dump(mapping, f)
+                    
+                    print(f"[download/local] ✅ Successfully armed Lifeboat with fresh tokens to {token_file_path}", flush=True)
+                    use_po = True
+                else:
+                    print("[download/local] ⚠️ Provider responded but keys missing.", flush=True)
+            else:
+                print(f"[download/local] ⚠️ Provider status error: {resp.status_code}", flush=True)
+        except Exception as e:
+            print(f"[download/local] ⚠️ Failed to connect to PO Token provider: {e}", flush=True)
+
+        # Step 2: Launch armed client
+        print(f"[download/local] pytubefix: Initializing for {video_url}...", flush=True)
+        if use_po:
+            yt = YouTube(video_url, on_progress_callback=on_progress, use_po_token=True, token_file=token_file_path)
+        else:
+            # Fallback if provider was down
+            yt = YouTube(video_url, on_progress_callback=on_progress)
+        
+        # Step 3: Find stream and save
         stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
         if not stream:
-            # Fallback to combined best
             stream = yt.streams.get_highest_resolution()
             
         if stream:
-            print(f"[download/local] pytubefix: Stream found ({stream.resolution}). Downloading...", flush=True)
-            # Define out_tmpl logic manually
+            print(f"[download/local] pytubefix: Stream located ({stream.resolution}). Direct injection downloading...", flush=True)
             final_filename = f"source_{yt.video_id}.mp4"
             downloaded_path = stream.download(output_path=out_dir, filename=final_filename)
-            print(f"[download/local] pytubefix: SUCCESS!!! Video saved to {downloaded_path}", flush=True)
+            print(f"[download/local] pytubefix: SUCCESS!!! Bypassed and saved to {downloaded_path}", flush=True)
             return downloaded_path
         else:
-            print("[download/local] pytubefix: No suitable streams found.", flush=True)
+            print("[download/local] pytubefix: CRITICAL - No suitable streams found in armed response.", flush=True)
     except Exception as pyerr:
         all_errors.append(f"Pytubefix Lifeboat -> {pyerr}")
         print(f"[download/local] NUCLEAR LIFEBOAT FAILED: {pyerr}", flush=True)
