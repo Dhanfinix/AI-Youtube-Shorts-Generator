@@ -50,7 +50,6 @@ jobs:
           exit 1
 
       - name: Install and Start Tor Service
-        if: ${{ env.ENABLE_TOR_ROUTING == 'true' }}
         run: |
           sudo apt-get update
           sudo apt-get install -y tor
@@ -73,12 +72,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           echo "--- 🧹 DETONATING POTENTIALLY CACHED BROKEN PLUGINS ---"
-          pip uninstall -y bgutil-ytdlp-pot-provider yt-dlp-plugins || true
+          pip uninstall -y bgutil-ytdlp-pot-provider yt-dlp-plugins yt-dlp || true
+          python -m pip uninstall -y yt-dlp || true
           pip install -r requirements.txt
           pip install -r requirements-local.txt
           python -m pip install -U pip hatchling wheel setuptools
-          pip install --force-reinstall "yt-dlp[default,curl-cffi] @ https://github.com/yt-dlp/yt-dlp/archive/master.tar.gz"
-          pip install -U pytubefix pysocks
+          python -m pip install --force-reinstall --no-cache-dir "yt-dlp[default,curl-cffi] @ https://github.com/yt-dlp/yt-dlp/archive/master.tar.gz"
+          python -m pip install -U pytubefix pysocks
 
       - name: Verify yt-dlp setup and plugin activation
         run: |

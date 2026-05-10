@@ -216,12 +216,11 @@ def _proxy_config() -> tuple[Optional[str], Optional[dict]]:
     finally:
         s.close()
 
-    if tor_available and _env_truthy("ENABLE_TOR_ROUTING"):
-        proxy = "socks5://127.0.0.1:9050"
-        print("[download/local] Tor proxy enabled via ENABLE_TOR_ROUTING=true.", flush=True)
-        return proxy, {"http": proxy, "https": proxy}
     if tor_available:
-        print("[download/local] Tor is available on 127.0.0.1:9050, but it is disabled. Set ENABLE_TOR_ROUTING=true to use it.", flush=True)
+        proxy = "socks5://127.0.0.1:9050"
+        print("[download/local] 🚀 FORCING Tor routing (Auto-detected active daemon on 9050).", flush=True)
+        return proxy, {"http": proxy, "https": proxy}
+
     return None, None
 
 
