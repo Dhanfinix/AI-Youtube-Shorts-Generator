@@ -250,9 +250,11 @@ def _youtube_extractor_args(player_clients_override: Optional[list] = None) -> d
 # ── Retry strategies: each entry is a list of player_client values to try ──
 # ── Fallback strategies ordered by maximum probability of success on datacenter IPs ──
 _FALLBACK_STRATEGIES = [
-    # Strategy 0: TV client combined with web_creator (High priority bypass)
+    # Strategy 0: Standard 'web' client (THE ONLY ONE THAT NATIVELY MATCHES OUR PO TOKEN PROVIDER!)
+    ["web"],
+    # Strategy 1: TV client combined with web_creator
     ["tv", "web_creator"],
-    # Strategy 1: TV client alone (DOES NOT require login, natively supports our PO Token generator!)
+    # Strategy 2: TV client alone
     ["tv"],
     # Strategy 2: TV Embedded (Alternative no-login endpoint)
     ["tv_embedded"],
@@ -491,10 +493,11 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
         # Step 2: Launch armed client
         print(f"[download/local] pytubefix: Initializing for {video_url}...", flush=True)
         if use_po:
-            yt = YouTube(video_url, on_progress_callback=on_progress, use_po_token=True, token_file=token_file_path)
+            # CRITICAL: Explicitly set client='WEB' to match our token type
+            yt = YouTube(video_url, client='WEB', on_progress_callback=on_progress, use_po_token=True, token_file=token_file_path)
         else:
             # Fallback if provider was down
-            yt = YouTube(video_url, on_progress_callback=on_progress)
+            yt = YouTube(video_url, client='WEB', on_progress_callback=on_progress)
         
         # Step 3: Find stream and save
         stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()

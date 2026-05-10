@@ -11,7 +11,7 @@ jobs:
   process-clips:
     runs-on: ubuntu-latest
     env:
-      ENABLE_TOR_ROUTING: ${{ secrets.ENABLE_TOR_ROUTING || 'false' }}
+      ENABLE_TOR_ROUTING: ${{ secrets.ENABLE_TOR_ROUTING || 'true' }}
 
     steps:
       - name: Checkout repository
