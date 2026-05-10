@@ -30,9 +30,19 @@ jobs:
         run: |
           echo "[setup] Starting official PO Token Provider Docker container..."
           docker run --name bgutil-provider -d -p 4416:4416 --restart always brainicism/bgutil-ytdlp-pot-provider
-          echo "[setup] Waiting for provider to initialize..."
-          sleep 5
-          curl -s http://127.0.0.1:4416/ping || echo "[warning] Provider ping failed, but proceeding anyway..."
+          docker ps
+          echo "Polling BGUtil Provider Readiness..."
+          for i in {1..30}; do
+            if curl -s --fail http://127.0.0.1:4416/ping > /dev/null; then
+              echo "✅ Provider is ONLINE and healthy!"
+              exit 0
+            fi
+            echo "Still initializing... ($i/30)"
+            sleep 2
+          done
+          echo "❌ CRITICAL: Provider failed to become healthy within 60 seconds!"
+          docker logs bgutil-provider
+          exit 1
 
       - name: Install and Start Tor Service
         if: ${{ env.ENABLE_TOR_ROUTING == 'true' }}

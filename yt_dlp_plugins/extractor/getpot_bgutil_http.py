@@ -74,7 +74,7 @@ class BgUtilHTTPPTP(BgUtilPTPBase):
         except HTTPError as e:
             # may be an old server, don't raise
             self.logger.warning(
-                f'HTTP Error reaching GET /ping (caused by {e!r})', once=True)
+                f'HTTP Error reaching GET /ping (caused by {e!r})')
             return
         except json.JSONDecodeError as e:
             # invalid server

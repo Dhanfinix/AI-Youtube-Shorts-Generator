@@ -45,8 +45,8 @@ class BgUtilPTPBase(PoTokenProvider, abc.ABC):
         self.logger.info(msg)
         raise PoTokenProviderRejectedRequest(msg) from raise_from
 
-    def _warn_and_raise(self, msg, once=True, raise_from=None):
-        self.logger.warning(msg, once=once)
+    def _warn_and_raise(self, msg, raise_from=None):
+        self.logger.warning(msg)
         raise PoTokenProviderRejectedRequest(msg) from raise_from
 
     def _script_config_arg(self, key: str, default: T = None, *, casesense=True) -> str | T:
@@ -77,8 +77,7 @@ class BgUtilPTPBase(PoTokenProvider, abc.ABC):
                 f'this may cause compatibility issues. '
                 f'Please ensure they are on the same version. '
                 f'Otherwise, help will NOT be provided for any issues that arise. '
-                f'(plugin: {self.PROVIDER_VERSION}, {name}: {got_version or default})',
-                once=True)
+                f'(plugin: {self.PROVIDER_VERSION}, {name}: {got_version or default})')
 
         if not got_version or _major(got_version) != _major(self.PROVIDER_VERSION):
             self._warn_and_raise(
