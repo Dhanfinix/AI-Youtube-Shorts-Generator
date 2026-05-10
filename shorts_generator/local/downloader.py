@@ -347,13 +347,19 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
         "fragment_retries": 3,
         "extractor_retries": 3,
         "sleep_interval_requests": 1,
-        # CRITICAL 2026 UPGRADE: Impersonate Chrome at the TLS layer to bypass advanced fingerprinting
-        "impersonate": "chrome",
-        # Static high-stability User-Agent aligned with modern desktop distributions
-        "http_headers": {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
-        },
     }
+
+    # CRITICAL 2026 UPGRADE: Fix the 2025+ Syntax Exception causing AssertionError
+    try:
+        from yt_dlp.networking.impersonate import ImpersonateTarget
+        base_opts["impersonate"] = ImpersonateTarget.from_str("chrome")
+        print("[download/local] TLS Impersonate Active: Applied native 'chrome' ImpersonateTarget object.", flush=True)
+    except ImportError:
+        print("[download/local] WARNING: Could not import ImpersonateTarget, falling back to default logic.", flush=True)
+        base_opts["http_headers"] = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+        }
+
     if ytdlp_proxy:
         base_opts["proxy"] = ytdlp_proxy
     if cookie_path:
