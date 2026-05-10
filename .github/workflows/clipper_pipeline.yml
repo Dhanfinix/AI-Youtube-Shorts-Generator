@@ -29,7 +29,7 @@ jobs:
       - name: Install Chromium (for yt-dlp PO Token generation)
         run: |
           sudo apt-get update
-          sudo apt-get install -y chromium-browser || sudo apt-get install -y chromium
+          sudo apt-get install -y chromium-browser xvfb || sudo apt-get install -y chromium xvfb
           echo "CHROMIUM_PATH=$(which chromium-browser || which chromium)" >> $GITHUB_ENV
 
       - name: Install and Start Tor Service
@@ -76,5 +76,5 @@ jobs:
           YOUTUBE_VISITOR_DATA: ${{ secrets.YOUTUBE_VISITOR_DATA }}
           RAPID_YT_API_KEY: ${{ secrets.RAPID_YT_API_KEY }}
         run: |
-          python automation.py
+          xvfb-run python automation.py
 
