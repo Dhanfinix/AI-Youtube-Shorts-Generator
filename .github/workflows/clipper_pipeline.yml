@@ -11,7 +11,7 @@ jobs:
   process-clips:
     runs-on: ubuntu-latest
     env:
-      ENABLE_TOR_ROUTING: ${{ secrets.ENABLE_TOR_ROUTING || 'false' }}
+      ENABLE_TOR_ROUTING: ${{ secrets.ENABLE_TOR_ROUTING || 'true' }}
 
     steps:
       - name: Checkout repository
@@ -50,6 +50,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y tor
           sudo service tor start
+          echo "Verifying Tor Tunnel Status..."
+          sleep 5
+          curl -s --socks5-hostname 127.0.0.1:9050 https://check.torproject.org/api/ip || echo "Tor verification failed, proceed anyway..."
 
       - name: Install Python Dependencies
         run: |
@@ -84,7 +87,7 @@ jobs:
           LOCAL_TRANSCRIBER_PRIORITY: ${{ secrets.LOCAL_TRANSCRIBER_PRIORITY || 'youtube' }}
           LOCAL_TARGET_LANGUAGE: ${{ secrets.LOCAL_TARGET_LANGUAGE || 'auto' }}
           YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
-          ENABLE_TOR_ROUTING: ${{ secrets.ENABLE_TOR_ROUTING || 'false' }}
+          ENABLE_TOR_ROUTING: ${{ secrets.ENABLE_TOR_ROUTING || 'true' }}
           YOUTUBE_PROXY: ${{ secrets.YOUTUBE_PROXY }}
           YT_DLP_PLAYER_CLIENTS: ${{ secrets.YT_DLP_PLAYER_CLIENTS || 'web_creator,default' }}
           RAPID_YT_API_KEY: ${{ secrets.RAPID_YT_API_KEY }}
