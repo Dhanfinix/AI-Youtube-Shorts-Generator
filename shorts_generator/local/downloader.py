@@ -42,8 +42,8 @@ def _format_for(fmt: str) -> str:
     except ValueError:
         height = 720
     return (
-        f"bestvideo[height<={height}][ext=mp4]+bestaudio[ext=m4a]/"
-        f"best[height<={height}][ext=mp4]/best"
+        f"bestvideo[height<={height}]+bestaudio/"
+        f"best[height<={height}]/best"
     )
 
 
@@ -338,6 +338,14 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
         "fragment_retries": 3,
         "extractor_retries": 3,
         "sleep_interval_requests": 1,
+        "http_headers": {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/131.0.0.0 Safari/537.36"
+            ),
+            "Accept-Language": "en-US,en;q=0.9",
+        },
     }
     if ytdlp_proxy:
         base_opts["proxy"] = ytdlp_proxy
