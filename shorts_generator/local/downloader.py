@@ -354,11 +354,12 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
     for idx, strategy in enumerate(_FALLBACK_STRATEGIES):
         clients_label = strategy or (os.getenv("YT_DLP_PLAYER_CLIENTS") or "web_creator,default")
         
-        # TRY EACH STRATEGY THREE TIMES:
-        # 0: Standard Cookies
-        # 1: Anonymous
-        # 2: Anonymous + SKIP WEBPAGE (Forces direct InnerTube/API bypassing HTML gate)
-        for auth_idx in [0, 1, 2]:
+        # TRY EACH STRATEGY FOUR TIMES TO COVER ALL COMBINATORIAL PERMUTATIONS:
+        # 0: Standard + Cookies
+        # 1: Standard + Anonymous
+        # 2: Anonymous + SKIP WEBPAGE
+        # 3: WITH Cookies + SKIP WEBPAGE (The Final Synthesis!)
+        for auth_idx in [0, 1, 2, 3]:
             if auth_idx == 0:
                 auth_label = "WITH Cookies"
                 use_cookies = True
@@ -367,16 +368,20 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
                 auth_label = "ANONYMOUS (No Cookies)"
                 use_cookies = False
                 skip_webpage = False
-            else:
+            elif auth_idx == 2:
                 auth_label = "ANONYMOUS + SKIP WEBPAGE (Direct API Bypass)"
                 use_cookies = False
+                skip_webpage = True
+            else:
+                auth_label = "WITH Cookies + SKIP WEBPAGE (FINAL SYNTHESIS)"
+                use_cookies = True
                 skip_webpage = True
 
             print(f"[download/local] Strategy {idx}.{auth_idx}: player_client={clients_label} [{auth_label}]", flush=True)
 
             extractor_args = _youtube_extractor_args(player_clients_override=strategy)
             if skip_webpage:
-                # Add nuclear skip flag to the extractor args
+                # Force nuclear skip flag to bypass the front door
                 if "youtube" not in extractor_args:
                     extractor_args["youtube"] = {}
                 extractor_args["youtube"]["player_skip"] = ["webpage"]
