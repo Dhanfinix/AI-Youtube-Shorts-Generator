@@ -1683,6 +1683,25 @@ def crop_highlights_local(
                 source_metadata=source_metadata,
             )
             results.append({**h, "clip_url": out_path})
+            
+            # SIDE-CAR HELPER: Create a handy copy-paste friendly text file with metadata for posting!
+            try:
+                txt_path = os.path.splitext(out_path)[0] + ".txt"
+                with open(txt_path, "w", encoding="utf-8") as f:
+                    f.write("==================================================\n")
+                    f.write("🎬  POST DETAILS / CAPTION HELPER\n")
+                    f.write("==================================================\n\n")
+                    f.write(f"📝 [JUDUL VIDEO]\n{h.get('title', 'N/A')}\n\n")
+                    f.write(f"💬 [CAPTION / DESKRIPSI VIDEO]\n{h.get('social_caption', 'N/A')}\n\n")
+                    f.write(f"🪝  [HOOK SENTENCE]\n\"{h.get('hook_sentence', 'N/A')}\"\n\n")
+                    f.write("--- METADATA INTERNAL ---\n")
+                    f.write(f"💡 [NOTE PEMBUAT / WHY VIRAL]: {h.get('virality_reason', 'N/A')}\n")
+                    f.write(f"🔥 [VIRAL SCORE]: {h.get('score', 'N/A')}/100\n\n")
+                    f.write("==================================================\n")
+                    f.write("Ready to copy and paste for Shorts / Reels / TikTok!\n")
+                print(f"[clip/local] Created companion metadata: {os.path.basename(txt_path)}", flush=True)
+            except Exception as te:
+                print(f"[clip/local] Info: Could not create metadata file: {te}", flush=True)
         except Exception as e:
             print(f"[clip/local] {i} failed: {e}", flush=True)
             results.append({**h, "clip_url": None, "error": str(e)})

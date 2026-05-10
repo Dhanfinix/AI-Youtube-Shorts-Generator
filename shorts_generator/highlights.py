@@ -57,9 +57,10 @@ Rules:
 - {num_clips_instruction}
 - For each highlight, identify the single best "hook_sentence" — the opening line that would make someone stop scrolling
 - Explain in one sentence why this clip is viral ("virality_reason")
+- Write a catchy and highly engaging viewer-facing description ("social_caption") intended for direct posting to YouTube/TikTok to hook the viewers, ask a question to spark comments, and summarize the core intrigue, in the same language as the video.
 
 Respond ONLY with valid JSON (no markdown, no explanation):
-{{"highlights":[{{"title":"string","start_time":float,"end_time":float,"score":int,"hook_sentence":"string","virality_reason":"string"}}]}}"""
+{{"highlights":[{{"title":"string","start_time":float,"end_time":float,"score":int,"hook_sentence":"string","virality_reason":"string","social_caption":"string"}}]}}"""
 
 
 CHUNK_SIZE_SECONDS = 1200       # 20-min chunks for long videos
@@ -157,6 +158,7 @@ def call_highlight_api(
 ) -> Dict:
     # Ask for ~2× the user's target so dedupe has headroom, but cap so the model
     # doesn't have to generate a huge JSON payload (which times out gpt-5-mini).
+    natural_max = max(1, int(duration // 60))
     if num_clips > 0:
         target = max(num_clips * 2, 5)
         min_clips = min(target, natural_max, 8)
