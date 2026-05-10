@@ -11,7 +11,7 @@ jobs:
   process-clips:
     runs-on: ubuntu-latest
     env:
-      ENABLE_TOR_PROXY: ${{ secrets.ENABLE_TOR_PROXY || 'false' }}
+      ENABLE_TOR_ROUTING: ${{ secrets.ENABLE_TOR_ROUTING || 'false' }}
 
     steps:
       - name: Checkout repository
@@ -35,7 +35,7 @@ jobs:
           curl -s http://127.0.0.1:4416/ping || echo "[warning] Provider ping failed, but proceeding anyway..."
 
       - name: Install and Start Tor Service
-        if: ${{ env.ENABLE_TOR_PROXY == 'true' }}
+        if: ${{ env.ENABLE_TOR_ROUTING == 'true' }}
         run: |
           sudo apt-get update
           sudo apt-get install -y tor
@@ -48,12 +48,17 @@ jobs:
           pip install -r requirements-local.txt
           pip install -U "yt-dlp>=2025.01.01" pytubefix pysocks bgutil-ytdlp-pot-provider
 
-      - name: Verify yt-dlp setup
+      - name: Verify yt-dlp setup and plugin activation
         run: |
           python -c "import yt_dlp; print(f'yt-dlp version: {yt_dlp.version.__version__}')"
-          yt-dlp --version
-          echo "--- Installed PO Token Providers ---"
-          yt-dlp -v --skip-download "https://www.youtube.com/watch?v=dQw4w9WgXcQ" 2>&1 | grep -i "pot\|bgutil\|provider" || echo "No PO token providers detected"
+          echo "--- Confirming Repository Sidecar Plugin Layout ---"
+          ls -R yt_dlp_plugins || echo "WARNING: Plugin directory MISSING!"
+          echo "--- Verbose Loading Verification ---"
+          # Use python -m to ensure it executes the EXACT SAME interpreter configuration as automation.py
+          python -m yt_dlp -v --skip-download "https://www.youtube.com/watch?v=dQw4w9WgXcQ" 2>&1 | head -n 50
+          # Ensure we actually found the plugin
+          python -m yt_dlp -v --skip-download "https://www.youtube.com/watch?v=dQw4w9WgXcQ" 2>&1 | grep -qi "bgutil" || (echo "CRITICAL: BGUtil PO provider NOT detected by yt-dlp!" && exit 1)
+          echo "✅ Verification PASSED: PO Token Provider detected."
 
       - name: Run Cookie Validator Tests
         run: |
@@ -71,7 +76,7 @@ jobs:
           YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
           YOUTUBE_USERNAME: ${{ secrets.YOUTUBE_USERNAME }}
           YOUTUBE_PASSWORD: ${{ secrets.YOUTUBE_PASSWORD }}
-          ENABLE_TOR_PROXY: ${{ secrets.ENABLE_TOR_PROXY || 'false' }}
+          ENABLE_TOR_ROUTING: ${{ secrets.ENABLE_TOR_ROUTING || 'false' }}
           YOUTUBE_PROXY: ${{ secrets.YOUTUBE_PROXY }}
           YT_DLP_PLAYER_CLIENTS: ${{ secrets.YT_DLP_PLAYER_CLIENTS || 'web_creator,default' }}
           RAPID_YT_API_KEY: ${{ secrets.RAPID_YT_API_KEY }}
