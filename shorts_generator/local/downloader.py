@@ -87,6 +87,7 @@ def _cookie_auth_summary(cookie_path: str) -> tuple[int, int]:
 
 
 def _write_cookie_secret(out_dir: str, value: str, source: str) -> Optional[str]:
+    os.makedirs(out_dir, exist_ok=True)
     cookie_path = os.path.join(out_dir, "youtube_cookies_temp.txt")
     with open(cookie_path, "w", encoding="utf-8") as f:
         f.write(_normalize_cookie_text(value))
