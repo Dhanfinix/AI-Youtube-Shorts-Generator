@@ -247,19 +247,24 @@ def _youtube_extractor_args(player_clients_override: Optional[list] = None) -> d
 
 
 # ── Retry strategies: each entry is a list of player_client values to try ──
+# ── Fallback strategies ordered by maximum probability of success on datacenter IPs ──
 _FALLBACK_STRATEGIES = [
-    # Strategy 0: user-configured (env) or default web_creator,default
-    None,
-    # Strategy 1: web_creator alone (works best with cookies on datacenter IPs)
+    # Strategy 0: TV client combined with web_creator (High priority bypass)
+    ["tv", "web_creator"],
+    # Strategy 1: TV client alone (DOES NOT require login, natively supports our PO Token generator!)
+    ["tv"],
+    # Strategy 2: TV Embedded (Alternative no-login endpoint)
+    ["tv_embedded"],
+    # Strategy 3: Web Embedded
+    ["web_embedded"],
+    # Strategy 4: web_creator alone (The one that already breached the firewall!)
     ["web_creator"],
-    # Strategy 2: default client (mweb / tv)
-    ["default"],
-    # Strategy 3: ios client (reliable mobile API, doesn't trigger browser UI)
+    # Strategy 5: iOS (Mobile stable API)
     ["ios"],
-    # Strategy 4: android_vr (highly stable legacy API)
+    # Strategy 6: Android VR
     ["android_vr"],
-    # Strategy 5: web + web_creator (LAST RESORT, can trigger slow browser engines)
-    ["web", "web_creator"],
+    # Strategy 7: Default fallthrough
+    ["default"],
 ]
 
 
