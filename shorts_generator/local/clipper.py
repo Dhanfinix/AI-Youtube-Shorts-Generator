@@ -31,14 +31,28 @@ def _slugify(text: str) -> str:
     return text
 
 
+def _get_ffmpeg_path() -> str:
+    """Detect fully-featured FFmpeg (e.g. Homebrew ffmpeg-full or system ffmpeg)."""
+    full_path = "/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg"
+    if os.path.exists(full_path):
+        return full_path
+    return "ffmpeg"
+
+
 def _cut_subclip(source_path: str, start: float, end: float, out_path: str) -> str:
     """ffmpeg -ss start -t duration → re-encoded mp4 with audio."""
+    from shorts_generator.config import USE_GPU
+    from shorts_generator.local.gpu_detector import GPUDetector
+    
+    gpu_det = GPUDetector()
+    encoder_args = gpu_det.get_encoder_args(use_gpu=USE_GPU)
+    
     cmd = [
-        "ffmpeg", "-y", "-loglevel", "error",
+        _get_ffmpeg_path(), "-y", "-loglevel", "error",
         "-ss", f"{start:.3f}",
         "-i", source_path,
         "-t", f"{end - start:.3f}",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+        *encoder_args,
         "-c:a", "aac", "-b:a", "128k",
         out_path,
     ]
@@ -152,16 +166,253 @@ def _ema_with_motion_limits_hybrid(
     return smoothed
 
 
+def _calculate_lip_activity(face_landmarks, prev_lip_distance=None) -> float:
+    """Calculate lip movement activity score using MediaPipe Face Mesh landmarks."""
+    upper_lip = face_landmarks.landmark[13]
+    lower_lip = face_landmarks.landmark[14]
+    
+    mouth_left = face_landmarks.landmark[61]
+    mouth_right = face_landmarks.landmark[291]
+    
+    mouth_height = abs(upper_lip.y - lower_lip.y)
+    mouth_width = abs(mouth_left.x - mouth_right.x)
+    
+    if mouth_width > 0:
+        aspect_ratio = mouth_height / mouth_width
+    else:
+        aspect_ratio = 0.0
+        
+    delta = 0.0
+    if prev_lip_distance is not None:
+        delta = abs(mouth_height - prev_lip_distance)
+        
+    # Combine openness and movement, weighting movement higher
+    activity_score = (aspect_ratio * 0.4) + (delta * 0.6)
+    return float(activity_score)
+
+
+def _stabilize_positions_with_activity(positions: List[float], activities: List[float], min_shot_duration: int, switch_threshold: float) -> List[float]:
+    """Stabilize crop positions based on lip activity scores (Shot-Based Locking)."""
+    if not positions:
+        return positions
+    
+    import numpy as np
+    
+    window_size = 30
+    smoothed = []
+    for i in range(len(positions)):
+        start = max(0, i - window_size // 2)
+        end = min(len(positions), i + window_size // 2)
+        window = positions[start:end]
+        smoothed.append(float(np.median(window)))
+        
+    final = []
+    shot_start = 0
+    current_position = smoothed[0] if smoothed else 0.0
+    
+    for i in range(len(smoothed)):
+        frames_since_switch = i - shot_start
+        
+        # Only allow switch if min shot duration passed, position changed significantly, and speaker is talking
+        if frames_since_switch >= min_shot_duration:
+            position_diff = abs(smoothed[i] - current_position)
+            activity = activities[i] if i < len(activities) else 0.0
+            
+            if position_diff > 150 and activity > switch_threshold:
+                # Lock previous shot to its median position
+                shot_positions = smoothed[shot_start:i]
+                if shot_positions:
+                    shot_median = float(np.median(shot_positions))
+                    final.extend([shot_median] * len(shot_positions))
+                shot_start = i
+                current_position = smoothed[i]
+                
+    # Handle the remaining frames in the last shot
+    shot_positions = smoothed[shot_start:]
+    if shot_positions:
+        shot_median = float(np.median(shot_positions))
+        final.extend([shot_median] * len(shot_positions))
+        
+    return final if final else smoothed
+
+
+def _stabilize_positions_by_speaker(positions: List[float], focus_ids: List[int], min_shot_duration: int, switch_threshold: float) -> List[float]:
+    """Stabilize crop positions based on speaker focus IDs (Shot-Based Locking)."""
+    if not positions:
+        return positions
+    
+    import numpy as np
+    
+    smoothed = []
+    window_size = 30
+    for i in range(len(positions)):
+        start = max(0, i - window_size // 2)
+        end = min(len(positions), i + window_size // 2)
+        window = positions[start:end]
+        smoothed.append(float(np.median(window)))
+        
+    final = []
+    shot_start = 0
+    current_position = smoothed[0] if smoothed else 0.0
+    current_focus_id = focus_ids[0] if focus_ids else 0
+    
+    for i in range(len(smoothed)):
+        frames_since_switch = i - shot_start
+        
+        # Only allow switch if min shot duration passed, and speaker changed OR position changed significantly
+        if frames_since_switch >= min_shot_duration:
+            position_diff = abs(smoothed[i] - current_position)
+            speaker_changed = (focus_ids[i] != current_focus_id) if i < len(focus_ids) else False
+            
+            if speaker_changed or position_diff > switch_threshold:
+                # Lock previous shot to its median position
+                shot_positions = smoothed[shot_start:i]
+                if shot_positions:
+                    shot_median = float(np.median(shot_positions))
+                    final.extend([shot_median] * len(shot_positions))
+                shot_start = i
+                current_position = smoothed[i]
+                current_focus_id = focus_ids[i] if i < len(focus_ids) else current_focus_id
+                
+    # Handle the remaining frames in the last shot
+    shot_positions = smoothed[shot_start:]
+    if shot_positions:
+        shot_median = float(np.median(shot_positions))
+        final.extend([shot_median] * len(shot_positions))
+        
+    return final if final else smoothed
+
+
+def _format_time(seconds: float) -> str:
+    """Convert seconds to ASS time format (H:MM:SS.CC)."""
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    centisecs = int((seconds % 1) * 100)
+    return f"{hours}:{minutes:02d}:{secs:02d}.{centisecs:02d}"
+
+
+def _create_ass_subtitle_capcut(word_captions: List[Dict], output_path: str, offset: float = 0.0):
+    """Create an ASS subtitle file with word-by-word active yellow highlighting."""
+    ass_content = """[Script Info]
+Title: Auto-generated captions
+ScriptType: v4.00+
+WrapStyle: 0
+PlayResX: 1080
+PlayResY: 1920
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Arial Black,65,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,2,2,50,50,400,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+    events = []
+    chunk_size = 4
+    
+    for i in range(0, len(word_captions), chunk_size):
+        chunk = word_captions[i:i + chunk_size]
+        if not chunk:
+            continue
+            
+        for j, current_word in enumerate(chunk):
+            word_start = current_word["start"] - offset
+            word_end = current_word["end"] - offset
+            
+            # Hide subtitle if it falls entirely within the first 0.8 seconds (thumbnail teaser period)
+            if word_end <= 0.8:
+                continue
+            
+            # Clamp starting time if it overlaps with the first 0.8 seconds
+            if word_start < 0.8:
+                word_start = 0.8
+            
+            text_parts = []
+            for k, w in enumerate(chunk):
+                word_text = w["word"].strip().upper()
+                if k == j:
+                    # Highlight active word in bright yellow (Hex: &H00FFFF& in ASS BBGGRR)
+                    text_parts.append(f"{{\\c&H00FFFF&}}{word_text}{{\\c&HFFFFFF&}}")
+                else:
+                    text_parts.append(word_text)
+                    
+            text = " ".join(text_parts)
+            events.append({
+                'start': _format_time(word_start),
+                'end': _format_time(word_end),
+                'text': text
+            })
+            
+    for event in events:
+        ass_content += f"Dialogue: 0,{event['start']},{event['end']},Default,,0,0,0,,{event['text']}\n"
+        
+    with open(output_path, 'w', encoding='utf-8') as f:
+        f.write(ass_content)
+
+
 def _detect_faces(frame, cv2, face_cascade, detector_name="opencv-haar") -> List[Dict]:
     """Return face boxes using MediaPipe if specified, defaulting to Haar Cascade."""
     faces: List[Dict] = []
-    if detector_name == "mediapipe":
+    if detector_name == "mediapipe-mesh":
         try:
             import mediapipe as mp
-            # Cache the MediaPipe detector on the function to avoid re-initializing it every frame
+            import mediapipe.python.solutions.face_mesh as mp_face_mesh
+            if not hasattr(_detect_faces, "mp_mesh_detector"):
+                _detect_faces.mp_mesh_detector = mp_face_mesh.FaceMesh(
+                    static_image_mode=False,
+                    max_num_faces=3,
+                    refine_landmarks=True,
+                    min_detection_confidence=0.5,
+                    min_tracking_confidence=0.5
+                )
+            
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            results = _detect_faces.mp_mesh_detector.process(rgb)
+            if results.multi_face_landmarks:
+                h_img, w_img, _ = frame.shape
+                for landmarks in results.multi_face_landmarks:
+                    # Calculate box around landmarks
+                    xs = [l.x for l in landmarks.landmark]
+                    ys = [l.y for l in landmarks.landmark]
+                    x_min, x_max = min(xs), max(xs)
+                    y_min, y_max = min(ys), max(ys)
+                    
+                    w = int((x_max - x_min) * w_img)
+                    h = int((y_max - y_min) * h_img)
+                    x = int(x_min * w_img)
+                    y = int(y_min * h_img)
+                    
+                    # Extract key mouth landmarks
+                    upper_lip = landmarks.landmark[13]
+                    lower_lip = landmarks.landmark[14]
+                    mouth_left = landmarks.landmark[61]
+                    mouth_right = landmarks.landmark[291]
+                    
+                    lip_dist = abs(upper_lip.y - lower_lip.y)
+                    mouth_w = abs(mouth_left.x - mouth_right.x)
+                    
+                    faces.append({
+                        "x": x,
+                        "y": y,
+                        "w": w,
+                        "h": h,
+                        "score": 0.9,
+                        "lip_dist": lip_dist,
+                        "mouth_aspect_ratio": float(lip_dist / mouth_w) if mouth_w > 0 else 0.0
+                    })
+        except Exception:
+            pass
+            
+    # Stage 2 Fallback: MediaPipe Basic (BlazeFace) - Extremely robust to tilt, profile, and illumination.
+    if len(faces) == 0 and (detector_name in ["mediapipe", "mediapipe-mesh"]):
+        try:
+            import mediapipe as mp
+            import mediapipe.python.solutions.face_detection as mp_face_detection
             if not hasattr(_detect_faces, "mp_detector"):
-                _detect_faces.mp_detector = mp.solutions.face_detection.FaceDetection(
-                    model_selection=1, min_detection_confidence=0.5
+                _detect_faces.mp_detector = mp_face_detection.FaceDetection(
+                    model_selection=1, min_detection_confidence=0.4 # slightly more permissive for profiles
                 )
             
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -192,17 +443,47 @@ def _detect_faces(frame, cv2, face_cascade, detector_name="opencv-haar") -> List
                         "nose_y": nose_y,
                         "mouth_y": mouth_y
                     })
-                return faces
         except Exception:
             pass
 
-    # OpenCV Haar Fallback
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    detected = face_cascade.detectMultiScale(
-        gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60)
-    )
-    for x, y, bw, bh in detected:
-        faces.append({"x": int(x), "y": int(y), "w": int(bw), "h": int(bh), "score": 0.7})
+    # Stage 3 Fallback: OpenCV Haar Frontal & Profile
+    if len(faces) == 0:
+        try:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            # First try Frontal
+            detected = face_cascade.detectMultiScale(
+                gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60)
+            )
+            for x, y, bw, bh in detected:
+                faces.append({"x": int(x), "y": int(y), "w": int(bw), "h": int(bh), "score": 0.7})
+            
+            # If still nothing, try Profile
+            if len(faces) == 0:
+                if not hasattr(_detect_faces, "profile_cascade"):
+                    _detect_faces.profile_cascade = cv2.CascadeClassifier(
+                        cv2.data.haarcascades + "haarcascade_profileface.xml"
+                    )
+                # Try profile face to handle extreme side-facing orientations
+                detected_prof = _detect_faces.profile_cascade.detectMultiScale(
+                    gray, scaleFactor=1.1, minNeighbors=4, minSize=(60, 60)
+                )
+                for x, y, bw, bh in detected_prof:
+                    faces.append({"x": int(x), "y": int(y), "w": int(bw), "h": int(bh), "score": 0.65})
+                
+                # Also try flipped image for profile in opposite direction
+                if len(faces) == 0:
+                    flipped = cv2.flip(gray, 1)
+                    detected_flipped = _detect_faces.profile_cascade.detectMultiScale(
+                        flipped, scaleFactor=1.1, minNeighbors=4, minSize=(60, 60)
+                    )
+                    h_img, w_img = gray.shape
+                    for x, y, bw, bh in detected_flipped:
+                        # Remap x coord back to original
+                        orig_x = w_img - x - bw
+                        faces.append({"x": int(orig_x), "y": int(y), "w": int(bw), "h": int(bh), "score": 0.65})
+        except Exception:
+            pass
+
     return faces
 
 
@@ -220,18 +501,18 @@ def _build_focus_trajectory(
     if total_frames <= 0:
         return []
 
-    from shorts_generator.config import LOCAL_FACE_DETECTOR
+    from shorts_generator.config import LOCAL_FACE_DETECTOR, USE_SHOT_LOCK, MIN_SHOT_DURATION
     detector_name = LOCAL_FACE_DETECTOR
-    if detector_name == "mediapipe":
-        try:
-            import mediapipe as mp
-        except ImportError:
-            detector_name = "opencv-haar"
-
+    min_center = crop_w / 2.0
+    max_center = src_w - crop_w / 2.0
+    default_center = _clamp(src_w / 2.0, min_center, max_center)
     detect_every_n = max(2, int(round(fps / 6.0)))
+
+
     max_match_distance = max(crop_w * 0.45, src_w * 0.12)
     sample_frames = list(range(0, total_frames, detect_every_n))
     tracks: List[Dict] = []
+
 
     for frame_idx in sample_frames:
         cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
@@ -296,7 +577,13 @@ def _build_focus_trajectory(
             else:
                 last_det = tracks[best_idx]["detections"][-1]
                 mouth_diff = 0.0
-                if det.get("mouth_norm") is not None and last_det.get("mouth_norm") is not None:
+                if "lip_dist" in det and "lip_dist" in last_det:
+                    # Higher fidelity MediaPipe metric combining openness (aspect ratio) and dynamics (delta)
+                    delta = abs(det["lip_dist"] - last_det["lip_dist"])
+                    ratio = det.get("mouth_aspect_ratio", 0.0)
+                    # Scale to achieve 1.0-5.0 range consistent with other methods
+                    mouth_diff = (ratio * 5.0) + (delta * 600.0)
+                elif det.get("mouth_norm") is not None and last_det.get("mouth_norm") is not None:
                     try:
                         import numpy as np
                         diff_img = cv2.absdiff(det["mouth_norm"], last_det["mouth_norm"])
@@ -344,7 +631,7 @@ def _build_focus_trajectory(
     if len(ranked_tracks) > 1:
         current_focus_idx = 0
         last_switch_frame = -100
-        min_switch_interval = int(fps * 2.0)  # Hold focus on a speaker for at least 2.0s to avoid dizzying cuts
+        min_switch_interval = int(fps * 1.0)  # Hold focus for at least 1.0s (down from 2.0s for higher dialogue cadence)
         
         for frame_idx in sample_frames:
             active_tracks_at_frame = []
@@ -355,7 +642,7 @@ def _build_focus_trajectory(
                     window = [
                         d["mouth_diff"]
                         for d in track["detections"]
-                        if abs(d["frame"] - frame_idx) <= int(fps * 1.5) and d.get("mouth_diff") is not None
+                        if abs(d["frame"] - frame_idx) <= int(fps * 0.75) and d.get("mouth_diff") is not None
                     ]
                     # The mean of mouth temporal differences represents the intensity of speaking activity
                     mean_val = sum(window) / len(window) if len(window) >= 1 else 0.0
@@ -373,35 +660,52 @@ def _build_focus_trajectory(
             
             if active_tracks_at_frame:
                 best_ti, best_score = max(active_tracks_at_frame, key=lambda x: x[1])
+                
+                # Calculate current focus score for comparative thresholding
+                current_score = 0.0
+                for ti, sc in active_tracks_at_frame:
+                    if ti == current_focus_idx:
+                        current_score = sc
+                        break
+                
                 # Ensure the prospective switch target has an actual face detection near this frame
-                track_has_recent_face = any(abs(d["frame"] - frame_idx) <= int(fps * 1.5) for d in ranked_tracks[best_ti]["detections"])
-                # If dynamic speaking activity is significant and different, switch focus safely
-                if track_has_recent_face and best_score > 1.3 and best_ti != current_focus_idx:
+                track_has_recent_face = any(abs(d["frame"] - frame_idx) <= int(fps * 0.75) for d in ranked_tracks[best_ti]["detections"])
+                
+                # Magnitude hysteresis: only switch if best is significantly better than current, or current is near silent
+                is_significantly_better = best_score > (current_score * 1.25) or current_score < 0.7
+                
+                # If dynamic speaking activity is significant, different, AND clearly stronger than current speaker
+                if track_has_recent_face and best_score > 1.3 and best_ti != current_focus_idx and is_significantly_better:
                     if frame_idx - last_switch_frame >= min_switch_interval:
                         current_focus_idx = best_ti
                         last_switch_frame = frame_idx
             
             # Use the focus coordinate of the active speaking track with a robust temporal fallback
             focus_track = ranked_tracks[current_focus_idx]
-            # Limit search to detections within +/- 1.0 seconds to prevent pulling positions from other scenes
             valid_dets = [d for d in focus_track["detections"] if abs(d["frame"] - frame_idx) <= int(fps * 1.0)]
             if valid_dets:
                 closest_det = min(valid_dets, key=lambda d: abs(d["frame"] - frame_idx))
                 target_cx = closest_det["cx"]
             else:
-                # Fallback: Look for ANY face detected on or very close (+/- 0.5s) to the current frame across all tracks
-                local_dets = []
-                for track in ranked_tracks:
-                    local_dets.extend([
-                        d for d in track["detections"]
-                        if abs(d["frame"] - frame_idx) <= int(fps * 0.5)
-                    ])
-                if local_dets:
-                    closest_local_det = min(local_dets, key=lambda d: abs(d["frame"] - frame_idx))
-                    target_cx = closest_local_det["cx"]
+                # CRITICAL FIX: If track is momentarily lost, STICK to its absolute closest detection EVER.
+                # Do not jump to global center! Jumping to center yields blank walls in dual interviews.
+                all_dets = focus_track["detections"]
+                if all_dets:
+                    closest_ever = min(all_dets, key=lambda d: abs(d["frame"] - frame_idx))
+                    target_cx = closest_ever["cx"]
                 else:
-                    # Absolute fallback: default center of the video
-                    target_cx = default_center
+                    # Ultra-fallback: Look globally for ANYTHING else
+                    local_dets = []
+                    for track in ranked_tracks:
+                        local_dets.extend([
+                            d for d in track["detections"]
+                            if abs(d["frame"] - frame_idx) <= int(fps * 0.5)
+                        ])
+                    if local_dets:
+                        closest_local_det = min(local_dets, key=lambda d: abs(d["frame"] - frame_idx))
+                        target_cx = closest_local_det["cx"]
+                    else:
+                        target_cx = default_center
 
             keyframes[frame_idx] = _clamp(target_cx, min_center, max_center)
             keyframes_focus_id[frame_idx] = current_focus_idx
@@ -451,6 +755,14 @@ def _build_focus_trajectory(
         max_pixels_per_second=max(80.0, crop_w * 0.85),
     )
     trajectory = [_clamp(v, min_center, max_center) for v in smoothed]
+
+    if USE_SHOT_LOCK:
+        trajectory = _stabilize_positions_by_speaker(
+            trajectory,
+            focus_ids,
+            min_shot_duration=MIN_SHOT_DURATION,
+            switch_threshold=150.0
+        )
 
     print(
         f"[face-track] {detector_name}: {len(tracks)} tracks, mode={mode_note}, "
@@ -725,16 +1037,22 @@ def _reframe_vertical(
         fps=fps,
     )
 
+    from shorts_generator.config import USE_GPU
+    from shorts_generator.local.gpu_detector import GPUDetector
+    
+    gpu_det = GPUDetector()
+    encoder_args = gpu_det.get_encoder_args(use_gpu=USE_GPU)
+
     silent_path = out_path + ".silent.mp4"
     cmd_ffmpeg = [
-        "ffmpeg", "-y", "-loglevel", "error",
+        _get_ffmpeg_path(), "-y", "-loglevel", "error",
         "-f", "rawvideo",
         "-vcodec", "rawvideo",
         "-pix_fmt", "bgr24",
         "-s", f"{out_w}x{out_h}",
         "-r", f"{fps:.3f}",
         "-i", "-",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+        *encoder_args,
         "-pix_fmt", "yuv420p",
         silent_path
     ]
@@ -772,7 +1090,13 @@ def _reframe_vertical(
         if out_w != crop_w or out_h != crop_h:
             cropped = cv2.resize(cropped, (out_w, out_h), interpolation=cv2.INTER_CUBIC)
 
-        if draw_subtitles:
+        # 1. First N frames (~0.8s): Draw Modern Creator Thumbnail Teaser
+        if frame_idx - 1 < teaser_frames and title:
+            face_canvas_x = int(((center_x - x0) / crop_w) * out_w)
+            face_canvas_y = int(out_h * 0.32)
+            cropped = render_thumbnail(cropped, title, out_w, out_h, face_canvas_x, face_canvas_y)
+
+        elif draw_subtitles:
             # Active word-level highlighting logic (matches Remotion single active word)
             display_word = None
             is_active = False
@@ -790,14 +1114,8 @@ def _reframe_vertical(
                     display_word = last_active_word
                     is_active = False
 
-            # 1. First N frames (~0.8s): Draw Modern Creator Thumbnail Teaser
-            if frame_idx - 1 < teaser_frames and title:
-                face_canvas_x = int(((center_x - x0) / crop_w) * out_w)
-                face_canvas_y = int(out_h * 0.32)
-                cropped = render_thumbnail(cropped, title, out_w, out_h, face_canvas_x, face_canvas_y)
-
             # 2. Body frames (or active words): Draw Single Word Subtitles
-            elif display_word:
+            if display_word:
                 # Convert BGR (OpenCV) to RGB (PIL)
                 pil_img = Image.fromarray(cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB))
                 draw = ImageDraw.Draw(pil_img, "RGBA")
@@ -846,7 +1164,7 @@ def _reframe_vertical(
 
     # Mux audio back on (copying pristine CRF 18 video stream directly)
     cmd = [
-        "ffmpeg", "-y", "-loglevel", "error",
+        _get_ffmpeg_path(), "-y", "-loglevel", "error",
         "-i", silent_path,
         "-i", in_path,
         "-c:v", "copy",
@@ -950,7 +1268,50 @@ def crop_clip_local(
             if os.path.exists(clean_cropped_path):
                 os.remove(clean_cropped_path)
         else:
-            _reframe_vertical(cut_path, out_path, aspect_ratio, start_time, word_captions, draw_subtitles=True, title=title)
+            from shorts_generator.config import USE_ASS_SUBTITLES, USE_GPU
+            from shorts_generator.local.gpu_detector import GPUDetector
+            import tempfile
+            
+            if USE_ASS_SUBTITLES:
+                reframed_clean_path = out_path + ".clean_reframed.mp4"
+                ass_file = f"temp_subtitles_{int(start_time)}.ass"
+                try:
+                    # 1. Reframe vertical with subtitle drawing disabled (extremely fast!)
+                    _reframe_vertical(cut_path, reframed_clean_path, aspect_ratio, start_time, word_captions, draw_subtitles=False, title=title)
+                    
+                    # 2. Build the ASS subtitle file with CapCut word-highlighting
+                    _create_ass_subtitle_capcut(word_captions, ass_file, start_time)
+                    
+                    # 3. Burn captions via FFmpeg (with optional hardware encoder!)
+                    gpu_det = GPUDetector()
+                    encoder_args = gpu_det.get_encoder_args(use_gpu=USE_GPU)
+                    
+                    cmd = [
+                        _get_ffmpeg_path(), "-y", "-loglevel", "error",
+                        "-i", reframed_clean_path,
+                        "-vf", f"ass=filename={ass_file}",
+                        *encoder_args,
+                        "-c:a", "copy",
+                        out_path
+                    ]
+                    subprocess.run(cmd, check=True)
+                    
+                    # Cleanup
+                    if os.path.exists(ass_file):
+                        os.unlink(ass_file)
+                    if os.path.exists(reframed_clean_path):
+                        os.remove(reframed_clean_path)
+                except Exception as e:
+                    print(f"[clip/local] ASS burning failed ({e}); falling back to PIL-based drawing", flush=True)
+                    if os.path.exists(ass_file):
+                        try: os.unlink(ass_file)
+                        except Exception: pass
+                    if os.path.exists(reframed_clean_path):
+                        try: os.remove(reframed_clean_path)
+                        except Exception: pass
+                    _reframe_vertical(cut_path, out_path, aspect_ratio, start_time, word_captions, draw_subtitles=True, title=title)
+            else:
+                _reframe_vertical(cut_path, out_path, aspect_ratio, start_time, word_captions, draw_subtitles=True, title=title)
     finally:
         if os.path.exists(cut_path):
             os.remove(cut_path)

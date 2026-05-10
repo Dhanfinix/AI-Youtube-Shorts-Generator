@@ -218,6 +218,22 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
     out_dir = out_dir or LOCAL_OUTPUT_DIR
     os.makedirs(out_dir, exist_ok=True)
 
+    # Check if a file for this video already exists on disk to preserve high resolution and save bandwidth
+    video_id = None
+    if "v=" in video_url:
+        video_id = video_url.split("v=")[1].split("&")[0]
+    elif "youtu.be/" in video_url:
+        video_id = video_url.split("youtu.be/")[1].split("?")[0]
+    elif "shorts/" in video_url:
+        video_id = video_url.split("shorts/")[1].split("?")[0]
+        
+    if video_id:
+        out_filename = f"source_{video_id}.mp4"
+        path = os.path.join(out_dir, out_filename)
+        if os.path.exists(path) and os.path.getsize(path) > 10000000:  # larger than 10MB
+            print(f"[download/local] High-quality source video already exists on disk: {path}. Reusing existing file!", flush=True)
+            return path
+
     ytdlp_proxy, req_proxies = _proxy_config()
 
     # 1. Check if the URL is a Google Drive link or direct MP4 link
@@ -252,43 +268,46 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
     # ── Try each player-client strategy in order ──
     last_err: Optional[Exception] = None
 
+    base_opts = {
+        "format": _format_for(fmt),
+        "outtmpl": os.path.join(out_dir, "source_%(id)s.%(ext)s"),
+        "merge_output_format": "mp4",
+        "quiet": True,
+        "no_warnings": True,
+        "noprogress": True,
+        "retries": 3,
+        "fragment_retries": 3,
+        "extractor_retries": 3,
+        "sleep_interval_requests": 1,
+        "http_headers": {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/131.0.0.0 Safari/537.36"
+            ),
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+    }
+    if ytdlp_proxy:
+        base_opts["proxy"] = ytdlp_proxy
+    if cookie_path:
+        base_opts["cookiefile"] = cookie_path
+
+    username = os.getenv("YOUTUBE_USERNAME")
+    password = os.getenv("YOUTUBE_PASSWORD")
+    if username:
+        base_opts["username"] = username
+    if password:
+        base_opts["password"] = password
+
+    # Phase 1: Standard strategies
     for idx, strategy in enumerate(_FALLBACK_STRATEGIES):
         extractor_args = _youtube_extractor_args(player_clients_override=strategy)
         clients_label = strategy or (os.getenv("YT_DLP_PLAYER_CLIENTS") or "web_creator,default")
         print(f"[download/local] Strategy {idx}: player_client={clients_label}", flush=True)
 
-        ydl_opts = {
-            "format": _format_for(fmt),
-            "outtmpl": os.path.join(out_dir, "source_%(id)s.%(ext)s"),
-            "merge_output_format": "mp4",
-            "quiet": True,
-            "no_warnings": True,
-            "noprogress": True,
-            "retries": 3,
-            "fragment_retries": 3,
-            "extractor_retries": 3,
-            "sleep_interval_requests": 1,
-            "extractor_args": extractor_args,
-            "http_headers": {
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/131.0.0.0 Safari/537.36"
-                ),
-                "Accept-Language": "en-US,en;q=0.9",
-            },
-        }
-        if ytdlp_proxy:
-            ydl_opts["proxy"] = ytdlp_proxy
-        if cookie_path:
-            ydl_opts["cookiefile"] = cookie_path
-
-        username = os.getenv("YOUTUBE_USERNAME")
-        password = os.getenv("YOUTUBE_PASSWORD")
-        if username:
-            ydl_opts["username"] = username
-        if password:
-            ydl_opts["password"] = password
+        ydl_opts = base_opts.copy()
+        ydl_opts["extractor_args"] = extractor_args
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -303,39 +322,27 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
                 flush=True,
             )
 
-    # All strategies exhausted — Fallback to pytubefix
-    try:
-        print("[download/local] yt-dlp failed after all strategies. Trying fallback via pytubefix...", flush=True)
-        from pytubefix import YouTube
-        
-        yt = YouTube(video_url)
-        print(f"[download/local] [pytubefix] Connected to video: '{yt.title}'", flush=True)
-        
-        # Try to get highest progressive mp4 stream (with audio and video merged)
-        stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
-        if not stream:
-            # Fallback to any progressive stream
-            stream = yt.streams.filter(progressive=True).order_by('resolution').desc().first()
-        if not stream:
-            # Fallback to any mp4 stream
-            stream = yt.streams.filter(file_extension='mp4').order_by('resolution').desc().first()
-        if not stream:
-            stream = yt.streams.first()
-            
-        if not stream:
-            raise RuntimeError("No suitable streams found via pytubefix")
-            
-        print(f"[download/local] [pytubefix] Downloading stream resolution: {stream.resolution}...", flush=True)
-        
-        # Determine the target output filename
-        video_id = getattr(yt, "video_id", "video")
-        out_filename = f"source_{video_id}.mp4"
-        path = os.path.join(out_dir, out_filename)
-        
-        # Perform download
-        stream.download(output_path=out_dir, filename=out_filename)
-        print(f"[download/local] [pytubefix] ready: {path}", flush=True)
-        return path
-    except Exception as pytube_err:
-        print(f"[download/local] pytubefix fallback failed: {pytube_err}", flush=True)
-        raise RuntimeError(f"yt-dlp download failed after all strategies: {last_err}")
+    # Phase 2: Elite fallback using local browser cookies automatically
+    print("[download/local] Standard strategies failed. Attempting fallback via local browser cookies...", flush=True)
+    browser_fallback = ["chrome", "safari", "firefox", "edge", "opera"]
+    
+    for browser in browser_fallback:
+        print(f"[download/local] Trying extraction from '{browser}' browser...", flush=True)
+        ydl_opts_browser = base_opts.copy()
+        # Remove explicitly passed cookiefile if we're trying automated browser extraction
+        ydl_opts_browser.pop("cookiefile", None)
+        ydl_opts_browser["cookiesfrombrowser"] = (browser,)
+        ydl_opts_browser["extractor_args"] = _youtube_extractor_args(player_clients_override=["default"])
+
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts_browser) as ydl:
+                info = ydl.extract_info(video_url, download=True)
+                path = _resolve_output_path(ydl, info)
+            print(f"[download/local] Success via '{browser}' cookies! ready: {path}", flush=True)
+            return path
+        except Exception as berr:
+            last_err = berr
+            clean_err = str(berr).split("\n")[0]
+            print(f"[download/local] '{browser}' extraction skipped/failed: {clean_err}", flush=True)
+
+    raise RuntimeError(f"YouTube download failed after all attempts (including browser cookie extraction). Details: {last_err}")
