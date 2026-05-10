@@ -26,11 +26,13 @@ jobs:
       - name: Set up FFmpeg
         uses: FedericoCarboni/setup-ffmpeg@v3
 
-      - name: Install Chromium (for yt-dlp PO Token generation)
+      - name: Start PO Token Provider (Background)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y chromium-browser xvfb || sudo apt-get install -y chromium xvfb
-          echo "CHROMIUM_PATH=$(which chromium-browser || which chromium)" >> $GITHUB_ENV
+          echo "[setup] Starting official PO Token Provider Docker container..."
+          docker run --name bgutil-provider -d -p 4416:4416 --restart always brainicism/bgutil-ytdlp-pot-provider
+          echo "[setup] Waiting for provider to initialize..."
+          sleep 5
+          curl -s http://127.0.0.1:4416/ping || echo "[warning] Provider ping failed, but proceeding anyway..."
 
       - name: Install and Start Tor Service
         if: ${{ env.ENABLE_TOR_PROXY == 'true' }}
@@ -44,14 +46,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -r requirements-local.txt
-          pip install -U "yt-dlp>=2025.05.01" pytubefix pysocks yt-dlp-getpot-wpc nodriver
+          pip install -U "yt-dlp>=2025.01.01" pytubefix pysocks bgutil-ytdlp-pot-provider
 
       - name: Verify yt-dlp setup
         run: |
           python -c "import yt_dlp; print(f'yt-dlp version: {yt_dlp.version.__version__}')"
           yt-dlp --version
           echo "--- Installed PO Token Providers ---"
-          yt-dlp -v --skip-download "https://www.youtube.com/watch?v=dQw4w9WgXcQ" 2>&1 | grep -i "pot\|getpot\|provider" || echo "No PO token providers detected"
+          yt-dlp -v --skip-download "https://www.youtube.com/watch?v=dQw4w9WgXcQ" 2>&1 | grep -i "pot\|bgutil\|provider" || echo "No PO token providers detected"
 
       - name: Run Cookie Validator Tests
         run: |
@@ -72,9 +74,7 @@ jobs:
           ENABLE_TOR_PROXY: ${{ secrets.ENABLE_TOR_PROXY || 'false' }}
           YOUTUBE_PROXY: ${{ secrets.YOUTUBE_PROXY }}
           YT_DLP_PLAYER_CLIENTS: ${{ secrets.YT_DLP_PLAYER_CLIENTS || 'web_creator,default' }}
-          YOUTUBE_PO_TOKEN: ${{ secrets.YOUTUBE_PO_TOKEN }}
-          YOUTUBE_VISITOR_DATA: ${{ secrets.YOUTUBE_VISITOR_DATA }}
           RAPID_YT_API_KEY: ${{ secrets.RAPID_YT_API_KEY }}
         run: |
-          xvfb-run python automation.py
+          python automation.py
 
