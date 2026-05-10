@@ -345,13 +345,6 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
     if cookie_path:
         base_opts["cookiefile"] = cookie_path
 
-    username = os.getenv("YOUTUBE_USERNAME")
-    password = os.getenv("YOUTUBE_PASSWORD")
-    if username:
-        base_opts["username"] = username
-    if password:
-        base_opts["password"] = password
-
     # Phase 1: Standard strategies
     for idx, strategy in enumerate(_FALLBACK_STRATEGIES):
         extractor_args = _youtube_extractor_args(player_clients_override=strategy)
@@ -368,7 +361,12 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
             print(f"[download/local] ready: {path}", flush=True)
             return path
         except Exception as err:
+            import traceback
             last_err = err
+            print("\n" + "!" * 40, flush=True)
+            print(f"[download/local] CRITICAL ERROR IN STRATEGY {idx} ({clients_label}):", flush=True)
+            traceback.print_exc()
+            print("!" * 40 + "\n", flush=True)
             print(
                 f"[download/local] Strategy {idx} failed ({type(err).__name__}): {err}",
                 flush=True,
