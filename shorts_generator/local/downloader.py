@@ -347,6 +347,12 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
         "fragment_retries": 3,
         "extractor_retries": 3,
         "sleep_interval_requests": 1,
+        # CRITICAL 2026 UPGRADE: Impersonate Chrome at the TLS layer to bypass advanced fingerprinting
+        "impersonate": "chrome",
+        # Static high-stability User-Agent aligned with modern desktop distributions
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+        },
     }
     if ytdlp_proxy:
         base_opts["proxy"] = ytdlp_proxy
@@ -435,6 +441,33 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
             all_errors.append(f"Browser {browser} -> {berr}")
             clean_err = str(berr).split("\n")[0]
             print(f"[download/local] '{browser}' extraction skipped/failed: {clean_err}", flush=True)
+
+    # Phase 3: NUCLEAR LIFEBOAT - Pytubefix Alternative Library
+    print("[download/local] ALL yt-dlp pathways EXHAUSTED. Deploying NUCLEAR LIFEBOAT: pytubefix...", flush=True)
+    try:
+        from pytubefix import YouTube
+        from pytubefix.cli import on_progress
+        print(f"[download/local] pytubefix: Initializing for {video_url}...", flush=True)
+        yt = YouTube(video_url, on_progress_callback=on_progress)
+        
+        # Try finding standard format progressive mp4 at required resolution or lower
+        stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
+        if not stream:
+            # Fallback to combined best
+            stream = yt.streams.get_highest_resolution()
+            
+        if stream:
+            print(f"[download/local] pytubefix: Stream found ({stream.resolution}). Downloading...", flush=True)
+            # Define out_tmpl logic manually
+            final_filename = f"source_{yt.video_id}.mp4"
+            downloaded_path = stream.download(output_path=out_dir, filename=final_filename)
+            print(f"[download/local] pytubefix: SUCCESS!!! Video saved to {downloaded_path}", flush=True)
+            return downloaded_path
+        else:
+            print("[download/local] pytubefix: No suitable streams found.", flush=True)
+    except Exception as pyerr:
+        all_errors.append(f"Pytubefix Lifeboat -> {pyerr}")
+        print(f"[download/local] NUCLEAR LIFEBOAT FAILED: {pyerr}", flush=True)
 
     full_error_summary = "\n".join(all_errors)
     raise RuntimeError(f"YouTube download failed all attempts.\n\n=== ERROR SUMMARY ===\n{full_error_summary}\n=====================\n")

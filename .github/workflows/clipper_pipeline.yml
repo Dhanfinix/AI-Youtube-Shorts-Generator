@@ -26,6 +26,11 @@ jobs:
       - name: Set up FFmpeg
         uses: FedericoCarboni/setup-ffmpeg@v3
 
+      - name: Set up Deno JavaScript Runtime (CRITICAL for YT-DLP Signatures)
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v1.x
+
       - name: Start PO Token Provider (Background)
         run: |
           echo "[setup] Starting official PO Token Provider Docker container..."
@@ -71,7 +76,7 @@ jobs:
           pip uninstall -y bgutil-ytdlp-pot-provider yt-dlp-plugins || true
           pip install -r requirements.txt
           pip install -r requirements-local.txt
-          pip install -U "yt-dlp>=2025.01.01" pytubefix pysocks
+          pip install -U "yt-dlp[curl-cffi]>=2025.01.01" pytubefix pysocks
 
       - name: Verify yt-dlp setup and plugin activation
         run: |
