@@ -232,7 +232,10 @@ def _youtube_extractor_args(player_clients_override: Optional[list] = None) -> d
             for item in (os.getenv("YT_DLP_PLAYER_CLIENTS") or "web_creator,default").split(",")
             if item.strip()
         ]
-    args = {"player_client": player_clients}
+    args = {
+        "player_client": player_clients,
+        "youtubepot-providers": ["bgutil:http"]
+    }
 
     po_token = os.getenv("YOUTUBE_PO_TOKEN") or os.getenv("YT_DLP_PO_TOKEN")
     visitor_data = os.getenv("YOUTUBE_VISITOR_DATA") or os.getenv("YT_DLP_VISITOR_DATA")
