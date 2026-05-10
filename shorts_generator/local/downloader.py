@@ -348,6 +348,8 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
     if cookie_path:
         base_opts["cookiefile"] = cookie_path
 
+    all_errors = []
+    
     # Phase 1: Standard strategies
     for idx, strategy in enumerate(_FALLBACK_STRATEGIES):
         extractor_args = _youtube_extractor_args(player_clients_override=strategy)
@@ -365,15 +367,12 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
             return path
         except Exception as err:
             import traceback
-            last_err = err
+            tb_str = traceback.format_exc()
+            all_errors.append(f"Strategy {idx} ({clients_label}) -> {type(err).__name__}: {err}")
             print("\n" + "!" * 40, flush=True)
             print(f"[download/local] CRITICAL ERROR IN STRATEGY {idx} ({clients_label}):", flush=True)
-            traceback.print_exc()
+            print(tb_str, flush=True)
             print("!" * 40 + "\n", flush=True)
-            print(
-                f"[download/local] Strategy {idx} failed ({type(err).__name__}): {err}",
-                flush=True,
-            )
 
     # Phase 2: Elite fallback using local browser cookies automatically
     print("[download/local] Standard strategies failed. Attempting fallback via local browser cookies...", flush=True)
@@ -394,8 +393,9 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
             print(f"[download/local] Success via '{browser}' cookies! ready: {path}", flush=True)
             return path
         except Exception as berr:
-            last_err = berr
+            all_errors.append(f"Browser {browser} -> {berr}")
             clean_err = str(berr).split("\n")[0]
             print(f"[download/local] '{browser}' extraction skipped/failed: {clean_err}", flush=True)
 
-    raise RuntimeError(f"YouTube download failed after all attempts (including browser cookie extraction). Details: {last_err}")
+    full_error_summary = "\n".join(all_errors)
+    raise RuntimeError(f"YouTube download failed all attempts.\n\n=== ERROR SUMMARY ===\n{full_error_summary}\n=====================\n")
