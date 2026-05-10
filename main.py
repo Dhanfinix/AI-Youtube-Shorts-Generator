@@ -20,7 +20,7 @@ def main() -> int:
         default="api",
         help="api (default, MuAPI) or local (yt-dlp + faster-whisper + OpenAI + ffmpeg).",
     )
-    parser.add_argument("--num-clips", type=int, default=3, help="How many shorts to render (default: 3)")
+    parser.add_argument("--num-clips", type=int, default=3, help="How many shorts to render (default: 3, use 0 for all found)")
     parser.add_argument("--aspect-ratio", default="9:16", help="Output aspect ratio (default: 9:16)")
     parser.add_argument("--format", default="1080", help="Source download resolution: 360 / 480 / 720 / 1080 (default: 1080)")
     parser.add_argument("--language", default=None, help="Force Whisper language code, e.g. 'en' (default: auto-detect)")

@@ -141,14 +141,24 @@ def process_automation():
         return
 
     youtube_url = str(job_data.get("YouTube URL", "")).strip()
-    clips_count = int(job_data.get("Clips Count", 3) or 3)
+    clips_raw = str(job_data.get("Clips Count", "")).strip().lower()
+    if clips_raw in ["all", "semua", "everything", "any"]:
+        clips_count = 0  # Our new 'unlimited' sentinel
+    else:
+        try:
+            clips_count = int(float(clips_raw)) if clips_raw else 3
+            # Ensure negative numbers are also mapped to unlimited 0 if user types that
+            if clips_count < 0:
+                clips_count = 0
+        except ValueError:
+            clips_count = 3 # Fallback to default if malformed
     language_code = job_data.get("Language", "auto")
     if str(language_code).strip().lower() in ["", "auto", "none"]:
         language_code = None
 
     print(f"\n[automation] Job Found at Row {pending_row_idx}:", flush=True)
     print(f" - URL:        {youtube_url}", flush=True)
-    print(f" - Clips:      {clips_count}", flush=True)
+    print(f" - Clips:      {clips_count if clips_count > 0 else 'ALL (Unlimited)'}", flush=True)
     print(f" - Language:   {language_code or 'auto-detect'}", flush=True)
 
     # 1. Lock Row to "Processing"

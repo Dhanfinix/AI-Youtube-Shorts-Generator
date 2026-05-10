@@ -157,9 +157,12 @@ def call_highlight_api(
 ) -> Dict:
     # Ask for ~2× the user's target so dedupe has headroom, but cap so the model
     # doesn't have to generate a huge JSON payload (which times out gpt-5-mini).
-    target = max(num_clips * 2, 5)
-    natural_max = max(2 if is_chunk else 3, int(duration / 90))
-    min_clips = min(target, natural_max, 8)
+    if num_clips > 0:
+        target = max(num_clips * 2, 5)
+        min_clips = min(target, natural_max, 8)
+    else:
+        # Unlimited mode: Ask for a robust number matching duration, capped conservatively to prevent timeout
+        min_clips = min(natural_max, 10)
     system = HIGHLIGHT_SYSTEM_PROMPT.format(
         virality_criteria=VIRALITY_CRITERIA,
         content_type=content_info.get("content_type", "other"),
@@ -227,7 +230,9 @@ def _generate_auto_highlights(transcript: Dict, num_clips: int) -> List[Dict]:
         start += step_size
 
     deduped = dedupe_highlights(candidates)
-    return deduped[:num_clips]
+    if num_clips > 0:
+        deduped = deduped[:num_clips]
+    return deduped
 
 
 def get_highlights(

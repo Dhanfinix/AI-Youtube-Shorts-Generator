@@ -779,6 +779,8 @@ def _get_font(font_size: int, font_weight: str = "bold"):
     paths = []
     if font_weight == "bold":
         paths = [
+            "/System/Library/Fonts/Supplemental/Impact.ttf",
+            "/System/Library/Fonts/Supplemental/DIN Condensed Bold.ttf",
             "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
             "/System/Library/Fonts/Helvetica-Bold.ttf",
             "/System/Library/Fonts/SFNS.ttf",
@@ -802,152 +804,197 @@ def _get_font(font_size: int, font_weight: str = "bold"):
 
 
 def detect_highlight_keywords(text: str) -> List[str]:
-    """Identify high-impact keywords to highlight (verbs, emotionally charged words, pronouns, questions)."""
+    """Split input and alternately select high-impact keywords so colors stagger naturally."""
     words = text.strip().upper().replace(".", "").replace(",", "").replace("?", "").replace("!", "").split()
-    impact_words = {
-        "BANYAK", "ISTRINYA", "NANYA", "NIKAH", "KAWIN", "MEMBUJANG", "VIRAL", "RAHASIA", "TIPS", "TRIK", 
-        "SUAMI", "ISTRI", "ANAK", "PENTING", "SALAH", "BENAR", "JALAN", "SELAMAT", "BELAJAR", "BISA", "HARUS",
-        "WELCOME", "EPISODE", "BENAR", "LURUS", "KESEMPATAN"
-    }
     highlights = []
-    for w in words:
-        if w in impact_words or len(w) > 6:
+    for idx, w in enumerate(words):
+        if idx % 2 == 0: # Highlight every other word for dynamic creator feel
             highlights.append(w)
-    if not highlights and words:
-        highlights.append(max(words, key=len))
     return highlights
 
 
 def draw_gradient_overlay(draw, out_w: int, out_h: int, pil_img):
-    """Draw a cinematic dark fade from the bottom (nearly black at the bottom)."""
+    """Draw severe cinematic vignette at bottom to ensure ultimate text readability."""
     from PIL import Image, ImageDraw
     overlay = Image.new("RGBA", (out_w, out_h), (0, 0, 0, 0))
     overlay_draw = ImageDraw.Draw(overlay)
+    # Dual-vignette Strategy
+    # Top faint vignette
+    for gy in range(0, int(out_h * 0.2)):
+        alpha = int(140 * (1.0 - (gy / (out_h * 0.2))))
+        overlay_draw.line([(0, gy), (out_w, gy)], fill=(0, 0, 0, alpha))
+    # Heavy bottom vignette
     for gy in range(int(out_h * 0.45), out_h):
-        factor = ((gy - out_h * 0.45) / (out_h * 0.55)) ** 1.8
-        alpha = int(245 * factor)
-        overlay_draw.line([(0, gy), (out_w, gy)], fill=(4, 4, 6, alpha))
+        factor = ((gy - out_h * 0.45) / (out_h * 0.55)) ** 1.6
+        alpha = int(250 * factor)
+        overlay_draw.line([(0, gy), (out_w, gy)], fill=(3, 3, 4, alpha))
     return Image.alpha_composite(pil_img.convert("RGBA"), overlay)
 
 
 def draw_subject_outline(draw, out_w: int, out_h: int, center_x: float, center_y: float):
-    """Draw a hand-drawn creator-style accent ring or cutout outline around the speaker's face area."""
+    """Placeholder disabled to maintain pure visual cinematic focus matching sample image."""
     pass
 
 
 def draw_badge(draw, out_w: int, out_h: int, style: str = "modern_shorts"):
-    """Draw an asymmetrical high-energy badge at top-left."""
-    badge_x = int(out_w * 0.07)
-    badge_y = int(out_h * 0.09)
-    badge_font = _get_font(int(out_w * 0.045), "bold")
-    badge_text = "SHORTS PILIHAN"
+    """Draw elegant outline capsule with central yellow play icon and 'SHORTS PILIHAN' white text."""
+    GOLD = (247, 182, 43)
     
-    text_bbox = draw.textbbox((0, 0), badge_text, font=badge_font)
-    text_w = text_bbox[2] - text_bbox[0]
-    text_h = text_bbox[3] - text_bbox[1]
+    b_font = _get_font(int(out_w * 0.035), "bold")
+    lbl = "SHORTS PILIHAN"
     
-    pad_x = int(out_w * 0.03)
-    pad_y = int(out_h * 0.012)
+    b = draw.textbbox((0, 0), lbl, font=b_font)
+    lw, lh = b[2] - b[0], b[3] - b[1]
     
-    shadow_offset = 5
-    draw.rounded_rectangle(
-        [badge_x + shadow_offset, badge_y + shadow_offset, badge_x + text_w + pad_x * 2 + shadow_offset, badge_y + text_h + pad_y * 2 + shadow_offset],
-        radius=14,
-        fill=(0, 0, 0, 180)
-    )
-    draw.rounded_rectangle(
-        [badge_x, badge_y, badge_x + text_w + pad_x * 2, badge_y + text_h + pad_y * 2],
-        radius=14,
-        fill=(255, 222, 0, 255),  # Viral neon yellow
-        outline=(0, 0, 0, 255),
-        width=3
-    )
-    draw.text((badge_x + pad_x, badge_y + pad_y - 2), badge_text, fill=(8, 8, 8, 255), font=badge_font)
+    icon_sz = int(lh * 0.9)
+    gap = int(out_w * 0.02)
+    px, py = int(out_w * 0.035), int(out_h * 0.015)
+    
+    bw = icon_sz + gap + lw + (px * 2)
+    bh = max(icon_sz, lh) + (py * 2)
+    
+    bx = int(out_w * 0.06)
+    by = int(out_h * 0.04)
+    
+    # 1. Outline Rounded Box
+    draw.rounded_rectangle([bx, by, bx + bw, by + bh], radius=10, fill=(0,0,0,120), outline=GOLD, width=2)
+    
+    # 2. Solid Play Triangle
+    ix = bx + px
+    iy = by + (bh - icon_sz) // 2
+    points = [(ix, iy), (ix, iy + icon_sz), (ix + int(icon_sz * 0.86), iy + (icon_sz // 2))]
+    draw.polygon(points, fill=GOLD)
+    
+    # 3. White Text
+    draw.text((ix + icon_sz + gap, by + (bh - lh) // 2 - 1), lbl, fill=(255,255,255), font=b_font)
 
 
 def draw_cta(draw, out_w: int, out_h: int, style: str = "modern_shorts"):
-    """Draw a minimal, subtle CTA on the lower-right."""
-    sub_font = _get_font(int(out_w * 0.035), "bold")
-    sub_text = "• TONTON SAMPAI AKHIR"
-    sub_bbox = draw.textbbox((0, 0), sub_text, font=sub_font)
-    sub_w = sub_bbox[2] - sub_bbox[0]
-    sub_h = sub_bbox[3] - sub_bbox[1]
+    """Draw minimal, right-aligned 'TONTON SAMPAI AKHIR' anchored slightly above lower boundary with a yellow bullet."""
+    GOLD = (247, 182, 43)
+    sub_font = _get_font(int(out_w * 0.028), "bold")
     
-    sub_x = out_w - sub_w - int(out_w * 0.07)
-    sub_y = out_h - sub_h - int(out_h * 0.06)
+    lbl = "TONTON SAMPAI AKHIR"
+    b = draw.textbbox((0, 0), lbl, font=sub_font)
+    lw, lh = b[2] - b[0], b[3] - b[1]
     
-    for ox, oy in [(-2, -2), (2, -2), (-2, 2), (2, 2), (0, 3)]:
-        draw.text((sub_x + ox, sub_y + oy), sub_text, fill=(0, 0, 0, 255), font=sub_font)
-    draw.text((sub_x, sub_y), sub_text, fill=(255, 255, 255, 230), font=sub_font)
+    dot_rad = int(out_w * 0.006)
+    gap_x = int(out_w * 0.018)
+    
+    # Right side anchor
+    tx = out_w - int(out_w * 0.08) - lw
+    ty = out_h - int(out_h * 0.08)
+    
+    # 1. Drop Shadow for legibility on white backgrounds
+    draw.text((tx + 2, ty + 2), lbl, fill=(0,0,0,180), font=sub_font)
+    # 2. Text
+    draw.text((tx, ty), lbl, fill=(255, 255, 255, 220), font=sub_font)
+    
+    # 3. The distinctive yellow dot
+    cx = tx - gap_x
+    cy = ty + (lh // 2) + 1
+    draw.ellipse([cx - dot_rad, cy - dot_rad, cx + dot_rad, cy + dot_rad], fill=GOLD)
 
 
 def draw_dynamic_title(draw, out_w: int, out_h: int, title: str, style: str = "modern_shorts"):
-    """Draw oversized, bold, high-contrast, asymmetrical typography with keyword highlighting directly on screen."""
-    title_text = title.upper()
-    highlights = detect_highlight_keywords(title_text)
+    """Draw huge staggered-color typography anchored to the bottom with alternating colors and an accent underscore."""
+    GOLD = (247, 182, 43)
+    WHITE = (255, 255, 255)
     
-    font_size = int(out_w * 0.10)
-    if len(title_text) > 34:
-        font_size = int(out_w * 0.08)
-        
-    title_font = _get_font(font_size, "bold")
-    margin_left = int(out_w * 0.08)
-    start_y = int(out_h * 0.58)
+    title_txt = title.upper().strip()
+    words = title_txt.split()
+    if not words: return
     
-    words = title_text.split()
+    # Start with bold massive sizes
+    font_sz = int(out_w * 0.135)
+    margin_left = int(out_w * 0.06)
+    usable_width = out_w - (margin_left * 2)
+    
+    # 1. Auto-scale Loop: Decrease size until it reasonably fits in max 4 lines without overflow
     lines = []
-    current_line = []
+    fnt_base = None
+    fnt_bold = None
     
-    for word in words:
-        test_line = " ".join(current_line + [word])
-        test_bbox = draw.textbbox((0, 0), test_line, font=title_font)
-        test_w = test_bbox[2] - test_bbox[0]
-        if test_w <= (out_w - margin_left * 2) and len(current_line) < 2:
-            current_line.append(word)
-        else:
-            if current_line:
-                lines.append(current_line)
-            current_line = [word]
-    if current_line:
-        lines.append(current_line)
+    # Safety counter to prevent infinite loops
+    for _ in range(10): 
+        fnt_base = _get_font(font_sz, "bold")
+        fnt_bold = _get_font(int(font_sz * 1.05), "bold")
         
-    lines = lines[:3]
-    
-    line_y = start_y
-    for line_idx, line_words in enumerate(lines):
-        x = margin_left
-        for w_idx, word in enumerate(line_words):
-            clean_word = word.replace(".", "").replace(",", "").replace("?", "").replace("!", "")
-            is_highlight = clean_word in highlights
+        lines = []
+        cur = []
+        
+        for w in words:
+            test = cur + [w]
+            acc_w = 0
+            for test_w in test:
+                bb = draw.textbbox((0, 0), test_w, font=fnt_base)
+                acc_w += (bb[2]-bb[0]) + int(out_w * 0.022)
             
-            fill_color = (255, 222, 0, 255) if is_highlight else (255, 255, 255, 255)
-            stroke_w = 6
-            stroke_color = (0, 0, 0, 255)
-            
-            w_bbox = draw.textbbox((0, 0), word, font=title_font)
-            w_width = w_bbox[2] - w_bbox[0]
-            w_height = w_bbox[3] - w_bbox[1]
-            
-            draw.text(
-                (x + 4, line_y + 4),
-                word,
-                fill=(0, 0, 0, 180),
-                font=title_font
-            )
-            draw.text(
-                (x, line_y),
-                word,
-                fill=fill_color,
-                font=title_font,
-                stroke_width=stroke_w,
-                stroke_fill=stroke_color
-            )
-            
-            pass
+            # If words are insanely wide even one per line, we MUST break anyway but force shrink
+            if acc_w <= usable_width and len(cur) < 2:
+                cur.append(w)
+            else:
+                if cur: lines.append(cur)
+                cur = [w]
+        if cur: lines.append(cur)
+        
+        # Check constraints: max 4 lines, and not running too tall. 
+        # If title is long, shrink and retry.
+        if len(lines) > 4 or font_sz > int(out_w * 0.14): 
+            font_sz = int(font_sz * 0.85) # Shrink by 15%
+        else:
+            # Double check actual maximum line width one more time
+            any_overflow = False
+            for ln in lines:
+                l_w = 0
+                for twd in ln:
+                    bb = draw.textbbox((0,0), twd, font=fnt_base)
+                    l_w += (bb[2]-bb[0]) + int(out_w * 0.02)
+                if l_w > usable_width:
+                    any_overflow = True
+                    break
+            if any_overflow:
+                font_sz = int(font_sz * 0.85)
+            else:
+                break # Fits perfectly!
                 
-            x += w_width + int(out_w * 0.03)
+    # Final fonts secured. Use EVERYTHING, no hard limit drops!
+    display = lines 
+    line_spc = int(font_sz * 1.05)
+    
+    # Anchor anchored low, scaling based on total number of rendered lines
+    b_y = int(out_h * 0.82) - (len(display) * line_spc)
+    
+    word_idx = 0
+    cy = b_y
+    
+    for ln_idx, ln in enumerate(display):
+        cx = margin_left
+        for wd in ln:
+            # Color Alternation Strategy (Yellow / White)
+            use_gold = (word_idx % 2 == 0)
+            fnt = fnt_bold if use_gold else fnt_base
+            fill = GOLD if use_gold else WHITE
             
-        line_y += font_size + int(out_h * 0.015)
+            tb = draw.textbbox((0, 0), wd, font=fnt)
+            ww, wh = tb[2]-tb[0], tb[3]-tb[1]
+            
+            # Heavy drop-shadow loops ensuring legibility 
+            for off in [2, 3, 4]:
+                draw.text((cx + off, cy + off), wd, fill=(0,0,0,190), font=fnt)
+            
+            # Final Foreground text
+            draw.text((cx, cy), wd, fill=fill, font=fnt)
+            
+            cx += ww + int(out_w * 0.025)
+            word_idx += 1
+            
+        cy += line_spc
+        
+    # 2. Heavy signature golden underline beneath the last actual line rendered
+    bar_y = cy + int(out_h * 0.008)
+    bar_w = int(out_w * 0.22)
+    draw.line([(margin_left, bar_y), (margin_left + bar_w, bar_y)], fill=GOLD, width=8)
 
 
 def render_thumbnail(
@@ -979,6 +1026,231 @@ def render_thumbnail(
     return cv2.cvtColor(np.array(pil_img.convert("RGB")), cv2.COLOR_RGB2BGR)
 
 
+def _format_timestamp(seconds: float) -> str:
+    hrs = int(seconds // 3600)
+    mins = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    if hrs > 0:
+        return f"{hrs:d}:{mins:02d}:{secs:02d}"
+    return f"{mins:02d}:{secs:02d}"
+
+
+def draw_timestamp_pill(draw, out_w: int, out_h: int, current_time: float, alpha_mult: float = 1.0):
+    """Draw bare stacked text in top-right corner, outline applied for high contrast, support fade alpha."""
+    time_txt = _format_timestamp(current_time)
+    
+    line1 = "Full Video"
+    line2 = time_txt
+    
+    font_l1 = _get_font(int(out_w * 0.030), "regular") 
+    font_l2 = _get_font(int(out_w * 0.038), "bold")
+    
+    bb1 = draw.textbbox((0, 0), line1, font=font_l1)
+    bb2 = draw.textbbox((0, 0), line2, font=font_l2)
+    w1, h1 = bb1[2] - bb1[0], bb1[3] - bb1[1]
+    w2, h2 = bb2[2] - bb2[0], bb2[3] - bb2[1]
+    
+    # Specific margin spacing off the edge ("jangan mentok")
+    margin_right = int(out_w * 0.06)
+    margin_top = int(out_w * 0.06)
+    line_spacing = int(out_h * 0.003)
+    
+    # Right aligned edge x coordinate
+    right_edge_x = out_w - margin_right
+    y_pos = margin_top
+    
+    # Dynamic alpha calculations based on incoming multiplier
+    text_a = int(255 * alpha_mult)
+    stroke_a = int(220 * alpha_mult)
+    
+    if text_a <= 0:
+        return # Invisible
+    
+    # Draw Line 1
+    draw.text(
+        (right_edge_x - w1, y_pos), 
+        line1, font=font_l1, 
+        fill=(255, 255, 255, text_a), 
+        stroke_width=2, stroke_fill=(0, 0, 0, stroke_a)
+    )
+    
+    # Draw Line 2
+    draw.text(
+        (right_edge_x - w2, y_pos + h1 + line_spacing), 
+        line2, font=font_l2, 
+        fill=(255, 255, 255, text_a), 
+        stroke_width=2, stroke_fill=(0, 0, 0, stroke_a)
+    )
+
+
+def generate_end_frame_canvas(out_w: int, out_h: int, metadata: dict):
+    """Synthesize an attribution frame replicating the reference dark/gold cinematic layout."""
+    import os
+    import cv2
+    import numpy as np
+    from PIL import Image, ImageDraw, ImageFilter, ImageEnhance
+    
+    GOLD = (247, 182, 43)
+    WHITE = (255, 255, 255)
+    
+    # 1. Base Canvas & Dynamic Background (Very Dark)
+    canvas = Image.new("RGB", (out_w, out_h), (10, 10, 12))
+    thumb_path = metadata.get("thumbnail_path")
+    thumb_img = None
+    
+    if thumb_path and os.path.exists(thumb_path):
+        try:
+            thumb_img = Image.open(thumb_path).convert("RGB")
+        except Exception:
+            pass
+            
+    if thumb_img:
+        # Center crop to fit vertically
+        aspect_c = out_w / out_h
+        tw, th = thumb_img.size
+        if (tw / th) > aspect_c:
+            cw = int(th * aspect_c)
+            left = (tw - cw) // 2
+            bg = thumb_img.crop((left, 0, left + cw, th))
+        else:
+            bg = thumb_img
+            
+        bg = bg.resize((out_w, out_h), Image.Resampling.BILINEAR)
+        bg = bg.filter(ImageFilter.GaussianBlur(radius=40))
+        # Extreme darkening to create contrast focus
+        bg = ImageEnhance.Brightness(bg).enhance(0.18)
+        canvas.paste(bg, (0, 0))
+    
+    draw = ImageDraw.Draw(canvas, "RGBA")
+    
+    # 2. "VIDEO LENGKAP DI" Header with Flanking Gold Lines
+    tag_txt = "VIDEO LENGKAP DI"
+    tag_font = _get_font(int(out_w * 0.045), "bold")
+    tb = draw.textbbox((0, 0), tag_txt, font=tag_font)
+    tw = tb[2] - tb[0]
+    th = tb[3] - tb[1]
+    
+    y_tag = int(out_h * 0.13)
+    center_x = out_w // 2
+    draw.text((center_x - (tw // 2), y_tag), tag_txt, fill=GOLD, font=tag_font)
+    
+    # Lines flanking the text
+    line_y = y_tag + (th // 2)
+    line_pad = int(out_w * 0.05)
+    margin_x = int(out_w * 0.12)
+    
+    draw.line([(margin_x, line_y), (center_x - (tw // 2) - line_pad, line_y)], fill=GOLD, width=2)
+    draw.line([(center_x + (tw // 2) + line_pad, line_y), (out_w - margin_x, line_y)], fill=GOLD, width=2)
+    
+    # 3. Massive, Dynamic Stacking Channel Name
+    chan_txt = str(metadata.get("channel", "")).upper().strip()
+    if not chan_txt:
+        chan_txt = "YOUTUBE"
+        
+    # Let's try splitting to two lines if it's long like the sample
+    words = chan_txt.split()
+    chan_lines = []
+    if len(words) >= 2:
+        # Group reasonably
+        mid = len(words) // 2
+        chan_lines.append(" ".join(words[:mid]))
+        chan_lines.append(" ".join(words[mid:]))
+    else:
+        chan_lines.append(chan_txt)
+        
+    chan_font_sz = int(out_w * 0.13) # MASSIVE
+    y_chan = y_tag + th + int(out_h * 0.03)
+    
+    for ln in chan_lines[:2]:
+        # Auto scale down slightly if word is absolutely insane
+        fnt = _get_font(chan_font_sz, "bold")
+        t_b = draw.textbbox((0, 0), ln, font=fnt)
+        w = t_b[2] - t_b[0]
+        curr_sz = chan_font_sz
+        while w > int(out_w * 0.92) and curr_sz > 40:
+            curr_sz -= 5
+            fnt = _get_font(curr_sz, "bold")
+            t_b = draw.textbbox((0, 0), ln, font=fnt)
+            w = t_b[2] - t_b[0]
+            
+        draw.text(((out_w - w) // 2, y_chan), ln, fill=WHITE, font=fnt)
+        y_chan += (t_b[3] - t_b[1]) + int(out_h * 0.005)
+        
+    # 4. Elegant Thumbnail With Rounded Corners and Glowing Border
+    y_thumb = int(out_h * 0.38)
+    if thumb_img:
+        t_w = int(out_w * 0.88)
+        t_h = int(thumb_img.height * (t_w / thumb_img.width))
+        r_thumb = thumb_img.resize((t_w, t_h), Image.Resampling.LANCZOS)
+        
+        t_x = (out_w - t_w) // 2
+        radius = 30
+        
+        # Apply rounded mask corner technique
+        mask = Image.new("L", (t_w, t_h), 0)
+        m_draw = ImageDraw.Draw(mask)
+        m_draw.rounded_rectangle([0, 0, t_w, t_h], radius=radius, fill=255)
+        
+        # Paste with mask to achieve clean rounded corners
+        canvas.paste(r_thumb, (t_x, y_thumb), mask)
+        
+        # Add the precise thin golden stroke directly from reference image
+        draw.rounded_rectangle([t_x, y_thumb, t_x + t_w, y_thumb + t_h], radius=radius, outline=GOLD, width=3)
+        y_after_thumb = y_thumb + t_h
+    else:
+        y_after_thumb = y_thumb + int(out_h * 0.2)
+
+    # 5. Video Title Placed Elegantly Below Box
+    v_title = str(metadata.get("title", "")).upper().strip()
+    title_font = _get_font(int(out_w * 0.052), "bold")
+    
+    words = v_title.split()
+    lines = []
+    cur = []
+    for w in words:
+        test = " ".join(cur + [w])
+        b = draw.textbbox((0, 0), test, font=title_font)
+        if (b[2] - b[0]) < int(out_w * 0.88):
+            cur.append(w)
+        else:
+            lines.append(" ".join(cur))
+            cur = [w]
+    if cur: lines.append(" ".join(cur))
+    
+    y_cur = y_after_thumb + int(out_h * 0.06)
+    # Limit to 2 readable lines
+    for ln in lines[:2]:
+        lb = draw.textbbox((0, 0), ln, font=title_font)
+        w = lb[2] - lb[0]
+        draw.text(((out_w - w) // 2, y_cur), ln, fill=WHITE, font=title_font)
+        y_cur += (lb[3] - lb[1]) + int(out_h * 0.01)
+        
+    # 6. Clean YouTube Style CTA Button
+    btn_txt = "LIKE & SUBSCRIBE"
+    btn_font = _get_font(int(out_w * 0.048), "bold")
+    bb = draw.textbbox((0, 0), btn_txt, font=btn_font)
+    bw, bh = (bb[2] - bb[0]), (bb[3] - bb[1])
+    
+    # Slightly bigger padding
+    p_x, p_y = 50, 25
+    
+    bx1 = (out_w - (bw + p_x * 2)) // 2
+    bx2 = bx1 + bw + p_x * 2
+    by1 = int(out_h * 0.83)
+    by2 = by1 + bh + p_y * 2
+    
+    # Deep red from reference image
+    btn_color = (198, 32, 32, 255) 
+    
+    draw.rounded_rectangle([bx1, by1, bx2, by2], radius=15, fill=btn_color)
+    # Draw text perfectly centered
+    t_x = bx1 + (bx2 - bx1 - bw) // 2
+    t_y = by1 + (by2 - by1 - bh) // 2 - 2
+    draw.text((t_x, t_y), btn_txt, fill=WHITE, font=btn_font)
+
+    return cv2.cvtColor(np.array(canvas.convert("RGB")), cv2.COLOR_RGB2BGR)
+
+
 def _reframe_vertical(
     in_path: str,
     out_path: str,
@@ -987,6 +1259,7 @@ def _reframe_vertical(
     word_captions: List[Dict],
     draw_subtitles: bool = True,
     title: Optional[str] = None,
+    source_metadata: Optional[Dict] = None,
 ) -> str:
     """Crop video, apply smooth horizontal face tracking, and burn karaoke captions."""
     try:
@@ -1064,6 +1337,12 @@ def _reframe_vertical(
 
     frame_idx = 0
     teaser_frames = int(round(0.8 * fps))
+    total_main_frames = len(focus_trajectory) if focus_trajectory else 0
+    
+    # Pre-calculate total frames to read from capture if focus_trajectory somehow missing
+    if not total_main_frames:
+        total_main_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        
     last_active_word = None
 
     while True:
@@ -1156,23 +1435,78 @@ def _reframe_vertical(
                 # Convert RGB (PIL) back to BGR (OpenCV)
                 cropped = cv2.cvtColor(np.array(pil_img.convert("RGB")), cv2.COLOR_RGB2BGR)
 
+        # 3. Overlay: Final Active Source Timestamp Pill
+        if source_metadata:
+            # Handle dynamic visibility / fade animation transitions
+            alpha_mult = 1.0
+            fade_frames = int(round(0.5 * fps))
+            
+            # Condition 1: Fade-In (Triggered AFTER teaser thumbnail finishes)
+            if frame_idx <= teaser_frames:
+                alpha_mult = 0.0
+            elif frame_idx <= (teaser_frames + fade_frames) and fade_frames > 0:
+                # Ramping up from 0.0 to 1.0 over 0.5s
+                alpha_mult = (frame_idx - teaser_frames) / float(fade_frames)
+                
+            # Condition 2: Fade-Out (Transitioning out before the 2s closing frame kicks in)
+            # Since cap.release() occurs right after this loop, total_main_frames represents the end of the raw video.
+            elif total_main_frames > 0 and frame_idx >= (total_main_frames - fade_frames) and fade_frames > 0:
+                # Ramping down from 1.0 to 0.0 toward the final frame
+                rem = total_main_frames - frame_idx
+                alpha_mult = max(0.0, rem / float(fade_frames))
+            
+            # Only perform relatively expensive PIL rendering operations if object is actually visible
+            if alpha_mult > 0.001:
+                pil_ticker = Image.fromarray(cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB))
+                draw_ticker = ImageDraw.Draw(pil_ticker, "RGBA")
+                # Enhanced function now accepts alpha blending
+                draw_timestamp_pill(draw_ticker, out_w, out_h, current_time, alpha_mult=alpha_mult)
+                cropped = cv2.cvtColor(np.array(pil_ticker.convert("RGB")), cv2.COLOR_RGB2BGR)
+
         writer_proc.stdin.write(cropped.tobytes())
 
     cap.release()
+
+    # Generate 2-second End Frame attribution loop
+    has_end_frame = False
+    if source_metadata:
+        try:
+            print(f"[clip/local] Generating attribution end-card for '{source_metadata.get('title', 'source')}'...", flush=True)
+            end_frame_img = generate_end_frame_canvas(out_w, out_h, source_metadata)
+            end_frames_count = int(2.0 * fps)
+            for _ in range(end_frames_count):
+                writer_proc.stdin.write(end_frame_img.tobytes())
+            has_end_frame = True
+        except Exception as ef_err:
+            print(f"[clip/local] Warning: End frame generation failed ({ef_err})", flush=True)
+
     writer_proc.stdin.close()
     writer_proc.wait()
 
-    # Mux audio back on (copying pristine CRF 18 video stream directly)
-    cmd = [
-        _get_ffmpeg_path(), "-y", "-loglevel", "error",
-        "-i", silent_path,
-        "-i", in_path,
-        "-c:v", "copy",
-        "-c:a", "aac", "-b:a", "192k",
-        "-map", "0:v:0", "-map", "1:a:0?",
-        "-shortest",
-        out_path,
-    ]
+    # Mux audio back on, applying apad filter if the video duration was extended
+    if has_end_frame:
+        cmd = [
+            _get_ffmpeg_path(), "-y", "-loglevel", "error",
+            "-i", silent_path,
+            "-i", in_path,
+            "-c:v", "copy",
+            "-filter_complex", "[1:a:0]apad=pad_dur=2.0[aout]", # Pad original audio with silence
+            "-map", "0:v:0", "-map", "[aout]",
+            "-c:a", "aac", "-b:a", "192k",
+            "-shortest",
+            out_path,
+        ]
+    else:
+        cmd = [
+            _get_ffmpeg_path(), "-y", "-loglevel", "error",
+            "-i", silent_path,
+            "-i", in_path,
+            "-c:v", "copy",
+            "-c:a", "aac", "-b:a", "192k",
+            "-map", "0:v:0", "-map", "1:a:0?",
+            "-shortest",
+            out_path,
+        ]
     subprocess.run(cmd, check=True)
     os.remove(silent_path)
     return out_path
@@ -1243,6 +1577,7 @@ def crop_clip_local(
     out_path: str,
     transcript_segments: Optional[List[Dict]] = None,
     title: Optional[str] = None,
+    source_metadata: Optional[Dict] = None,
 ) -> str:
     """Cut + reframe one highlight, returning the local mp4 path."""
     cut_path = out_path + ".cut.mp4"
@@ -1254,7 +1589,7 @@ def crop_clip_local(
         _cut_subclip(source_path, start_time, end_time, cut_path)
         if USE_REMOTION and os.path.exists("shorts_renderer"):
             clean_cropped_path = out_path + ".clean.mp4"
-            _reframe_vertical(cut_path, clean_cropped_path, aspect_ratio, start_time, word_captions, draw_subtitles=False, title=title)
+            _reframe_vertical(cut_path, clean_cropped_path, aspect_ratio, start_time, word_captions, draw_subtitles=False, title=title, source_metadata=source_metadata)
             
             duration_sec = end_time - start_time
             fps = 30.0
@@ -1277,7 +1612,7 @@ def crop_clip_local(
                 ass_file = f"temp_subtitles_{int(start_time)}.ass"
                 try:
                     # 1. Reframe vertical with subtitle drawing disabled (extremely fast!)
-                    _reframe_vertical(cut_path, reframed_clean_path, aspect_ratio, start_time, word_captions, draw_subtitles=False, title=title)
+                    _reframe_vertical(cut_path, reframed_clean_path, aspect_ratio, start_time, word_captions, draw_subtitles=False, title=title, source_metadata=source_metadata)
                     
                     # 2. Build the ASS subtitle file with CapCut word-highlighting
                     _create_ass_subtitle_capcut(word_captions, ass_file, start_time)
@@ -1309,9 +1644,9 @@ def crop_clip_local(
                     if os.path.exists(reframed_clean_path):
                         try: os.remove(reframed_clean_path)
                         except Exception: pass
-                    _reframe_vertical(cut_path, out_path, aspect_ratio, start_time, word_captions, draw_subtitles=True, title=title)
+                    _reframe_vertical(cut_path, out_path, aspect_ratio, start_time, word_captions, draw_subtitles=True, title=title, source_metadata=source_metadata)
             else:
-                _reframe_vertical(cut_path, out_path, aspect_ratio, start_time, word_captions, draw_subtitles=True, title=title)
+                _reframe_vertical(cut_path, out_path, aspect_ratio, start_time, word_captions, draw_subtitles=True, title=title, source_metadata=source_metadata)
     finally:
         if os.path.exists(cut_path):
             os.remove(cut_path)
@@ -1324,6 +1659,7 @@ def crop_highlights_local(
     aspect_ratio: str = "9:16",
     out_dir: Optional[str] = None,
     transcript_segments: Optional[List[Dict]] = None,
+    source_metadata: Optional[Dict] = None,
 ) -> List[Dict]:
     stem = os.path.splitext(os.path.basename(source_path))[0]
     video_id = stem.replace("source_", "")
@@ -1344,6 +1680,7 @@ def crop_highlights_local(
                 out_path,
                 transcript_segments=transcript_segments,
                 title=h.get("title"),
+                source_metadata=source_metadata,
             )
             results.append({**h, "clip_url": out_path})
         except Exception as e:

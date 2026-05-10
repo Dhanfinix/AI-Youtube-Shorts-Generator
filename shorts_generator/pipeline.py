@@ -76,14 +76,30 @@ def _run_local(
     if not all_highlights:
         raise RuntimeError("Highlight generator returned zero clips.")
 
-    top = sorted(all_highlights, key=lambda h: int(h.get("score", 0)), reverse=True)[:num_clips]
+    top = sorted(all_highlights, key=lambda h: int(h.get("score", 0)), reverse=True)
+    if num_clips > 0:
+        top = top[:num_clips]
     print(f"[pipeline/local] cropping {len(top)} of {len(all_highlights)} candidates", flush=True)
+
+    # Load Metadata Sidecar for visual attribution
+    source_metadata = {}
+    try:
+        src_dir = os.path.dirname(source_path)
+        src_stem = os.path.splitext(os.path.basename(source_path))[0]
+        meta_path = os.path.join(src_dir, f"{src_stem}_metadata.json")
+        if os.path.exists(meta_path):
+            print(f"[pipeline/local] Attaching source attribution metadata for rendering...", flush=True)
+            with open(meta_path, "r", encoding="utf-8") as mf:
+                source_metadata = json.load(mf)
+    except Exception as ex:
+        print(f"[pipeline/local] Info: Metadata load failed ({ex})", flush=True)
 
     shorts = crop_highlights_local(
         source_path,
         top,
         aspect_ratio=aspect_ratio,
         transcript_segments=transcript["segments"],
+        source_metadata=source_metadata,
     )
 
     return {
@@ -115,7 +131,9 @@ def _run_api(
     if not all_highlights:
         raise RuntimeError("Highlight generator returned zero clips.")
 
-    top = sorted(all_highlights, key=lambda h: int(h.get("score", 0)), reverse=True)[:num_clips]
+    top = sorted(all_highlights, key=lambda h: int(h.get("score", 0)), reverse=True)
+    if num_clips > 0:
+        top = top[:num_clips]
     print(f"[pipeline] cropping {len(top)} of {len(all_highlights)} candidates", flush=True)
 
     shorts = crop_highlights(source_url, top, aspect_ratio=aspect_ratio)

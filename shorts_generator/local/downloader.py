@@ -29,6 +29,23 @@ YOUTUBE_AUTH_COOKIE_NAMES = {
 def _import_ytdlp():
     try:
         import yt_dlp  # type: ignore
+        
+        # 🚀 CRITICAL FIX: Patch buggy yt-dlp-getpot plugin logger keyword overflow
+        try:
+            from yt_dlp.extractor.youtube.pot._director import YoutubeIEContentProviderLogger
+            
+            _orig_ytdlp_debug = YoutubeIEContentProviderLogger.debug
+            def _patched_ytdlp_debug(self, message, *a, **k):
+                return _orig_ytdlp_debug(self, message)
+            YoutubeIEContentProviderLogger.debug = _patched_ytdlp_debug
+
+            _orig_ytdlp_warning = YoutubeIEContentProviderLogger.warning
+            def _patched_ytdlp_warning(self, message, *a, **k):
+                return _orig_ytdlp_warning(self, message)
+            YoutubeIEContentProviderLogger.warning = _patched_ytdlp_warning
+        except Exception:
+            pass 
+            
     except ImportError as e:
         raise RuntimeError(
             "yt-dlp is required for --mode local. Install it with:\n"
@@ -286,6 +303,34 @@ def _resolve_output_path(ydl, info) -> str:
     return path
 
 
+def _save_source_metadata(out_dir: str, info: dict, video_id: str) -> str:
+    """Save relevant fields (title, uploader, thumbnail) to a sidecar JSON file for attribution."""
+    import json
+    import glob
+    
+    metadata = {
+        "video_id": video_id or info.get("id"),
+        "title": info.get("title", "Unknown Video"),
+        "channel": info.get("uploader") or info.get("channel") or "Unknown Creator",
+        "duration": info.get("duration"),
+        "thumbnail_path": None
+    }
+    
+    # Search for the written thumbnail file in the directory
+    target_prefix = os.path.join(out_dir, f"source_{metadata['video_id']}.")
+    matches = glob.glob(f"{target_prefix}*")
+    for match in matches:
+        ext = os.path.splitext(match)[1].lower()
+        if ext in [".webp", ".jpg", ".jpeg", ".png"]:
+            metadata["thumbnail_path"] = os.path.abspath(match)
+            break
+            
+    meta_path = os.path.join(out_dir, f"source_{metadata['video_id']}_metadata.json")
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2)
+    return meta_path
+
+
 def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[str] = None) -> str:
     """Download to disk and return the local mp4 path."""
     out_dir = out_dir or LOCAL_OUTPUT_DIR
@@ -303,8 +348,31 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
     if video_id:
         out_filename = f"source_{video_id}.mp4"
         path = os.path.join(out_dir, out_filename)
+        meta_path = os.path.join(out_dir, f"source_{video_id}_metadata.json")
+        
         if os.path.exists(path) and os.path.getsize(path) > 10000000:  # larger than 10MB
-            print(f"[download/local] High-quality source video already exists on disk: {path}. Reusing existing file!", flush=True)
+            print(f"[download/local] High-quality source video already exists on disk: {path}.", flush=True)
+            
+            # Lazy back-fill metadata if missing for cached file
+            if not os.path.exists(meta_path):
+                print(f"[download/local] Metadata missing for cached file. Performing lazy metadata extraction...", flush=True)
+                try:
+                    yt_dlp = _import_ytdlp()
+                    meta_opts = {
+                        "no_warnings": True,
+                        "skip_download": True,
+                        "writethumbnail": True,
+                        "outtmpl": os.path.join(out_dir, "source_%(id)s.%(ext)s")
+                    }
+                    with yt_dlp.YoutubeDL(meta_opts) as ydl:
+                        # download=True forces writethumbnail but skip_download=True skips payload
+                        info = ydl.extract_info(video_url, download=True)
+                        _save_source_metadata(out_dir, info, video_id)
+                except Exception as me:
+                    print(f"[download/local] Lazy metadata extraction failed: {me}", flush=True)
+                    print(f"[download/local] Lazy metadata extraction failed: {me}", flush=True)
+            
+            print(f"[download/local] Reusing existing file and metadata assets!", flush=True)
             return path
 
     ytdlp_proxy, req_proxies = _proxy_config()
@@ -345,6 +413,7 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
         "format": _format_for(fmt),
         "outtmpl": os.path.join(out_dir, "source_%(id)s.%(ext)s"),
         "merge_output_format": "mp4",
+        "writethumbnail": True,
         "quiet": False,
         "verbose": True,
         "no_warnings": False,
@@ -420,6 +489,7 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(video_url, download=True)
                     path = _resolve_output_path(ydl, info)
+                    _save_source_metadata(out_dir, info, info.get("id", ""))
                 print(f"[download/local] Strategy {idx}.{auth_idx} SUCCEEDED! ready: {path}", flush=True)
                 return path
             except Exception as err:
@@ -447,6 +517,7 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
             with yt_dlp.YoutubeDL(ydl_opts_browser) as ydl:
                 info = ydl.extract_info(video_url, download=True)
                 path = _resolve_output_path(ydl, info)
+                _save_source_metadata(out_dir, info, info.get("id", ""))
             print(f"[download/local] Success via '{browser}' cookies! ready: {path}", flush=True)
             return path
         except Exception as berr:
@@ -512,6 +583,28 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
             print(f"[download/local] pytubefix: Stream located ({stream.resolution}). Direct injection downloading...", flush=True)
             final_filename = f"source_{yt.video_id}.mp4"
             downloaded_path = stream.download(output_path=out_dir, filename=final_filename)
+            
+            # 4. Fetch Metadata & Thumbnail manually for consistency
+            try:
+                # Attempt to download thumbnail manually for the lifeboat success
+                thumb_resp = requests.get(yt.thumbnail_url, timeout=10)
+                thumb_resp.raise_for_status()
+                thumb_filename = f"source_{yt.video_id}.jpg"
+                thumb_path = os.path.join(out_dir, thumb_filename)
+                with open(thumb_path, 'wb') as f:
+                    f.write(thumb_resp.content)
+                
+                # Save metadata file
+                fake_info = {
+                    "id": yt.video_id,
+                    "title": yt.title,
+                    "uploader": yt.author,
+                    "duration": yt.length
+                }
+                _save_source_metadata(out_dir, fake_info, yt.video_id)
+            except Exception as mfe:
+                print(f"[download/local] Minor: Failed to download lifeboat thumbnail/metadata ({mfe})", flush=True)
+                
             print(f"[download/local] pytubefix: SUCCESS!!! Bypassed and saved to {downloaded_path}", flush=True)
             return downloaded_path
         else:
