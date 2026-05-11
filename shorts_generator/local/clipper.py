@@ -632,7 +632,7 @@ def _build_focus_trajectory(
     high_quality_tracks = [t for t in ranked_tracks if len(t["detections"]) >= 3]
     if high_quality_tracks:
         ranked_tracks = high_quality_tracks
-        
+    
     primary = ranked_tracks[0]
     primary_detections = primary["detections"]
 
@@ -642,24 +642,30 @@ def _build_focus_trajectory(
 
     # Active Speaker Detection if multiple faces are found
     if len(ranked_tracks) > 1:
+        # BOOTSTRAP: Initialize focus to the track that actually starts EARLIEST in the subclip.
         current_focus_idx = 0
+        earliest_seen = float('inf')
+        for ti, track in enumerate(ranked_tracks[:8]):
+            first_f = min(d["frame"] for d in track["detections"])
+            if first_f < earliest_seen:
+                earliest_seen = first_f
+                current_focus_idx = ti
+
         last_switch_frame = -100
-        min_switch_interval = int(fps * 1.0)  # Hold focus for at least 1.0s (down from 2.0s for higher dialogue cadence)
+        min_switch_interval = int(fps * 1.0)
         
         for frame_idx in sample_frames:
             active_tracks_at_frame = []
-            for ti, track in enumerate(ranked_tracks[:3]):  # Check top 3 tracks
+            # Expand from top-3 to top-8 to allow initial/intermittent short segments to be found
+            for ti, track in enumerate(ranked_tracks[:8]):  
                 has_det = any(abs(d["frame"] - frame_idx) <= detect_every_n * 2 for d in track["detections"])
                 if has_det:
-                    # Collect mouth temporal differences around this frame (+/- 1.5s)
                     window = [
                         d["mouth_diff"]
                         for d in track["detections"]
                         if abs(d["frame"] - frame_idx) <= int(fps * 0.75) and d.get("mouth_diff") is not None
                     ]
-                    # The mean of mouth temporal differences represents the intensity of speaking activity
                     mean_val = sum(window) / len(window) if len(window) >= 1 else 0.0
-                    # The standard deviation of the window represents dynamic fluctuation (dynamic lip movement!)
                     if len(window) >= 2:
                         import math
                         variance = sum((x - mean_val) ** 2 for x in window) / len(window)
@@ -667,59 +673,53 @@ def _build_focus_trajectory(
                     else:
                         std_val = 0.0
                     
-                    # Combine mean intensity and dynamic fluctuation to isolate true speech/lip movement
                     score = mean_val * (1.0 + 1.8 * std_val)
                     active_tracks_at_frame.append((ti, score))
             
             if active_tracks_at_frame:
                 best_ti, best_score = max(active_tracks_at_frame, key=lambda x: x[1])
                 
-                # Calculate current focus score for comparative thresholding
                 current_score = 0.0
                 for ti, sc in active_tracks_at_frame:
                     if ti == current_focus_idx:
                         current_score = sc
                         break
                 
-                # Ensure the prospective switch target has an actual face detection near this frame
                 track_has_recent_face = any(abs(d["frame"] - frame_idx) <= int(fps * 0.75) for d in ranked_tracks[best_ti]["detections"])
-                
-                # Magnitude hysteresis: only switch if best is significantly better than current, or current is near silent
                 is_significantly_better = best_score > (current_score * 1.25) or current_score < 0.7
                 
-                # If dynamic speaking activity is significant, different, AND clearly stronger than current speaker
                 if track_has_recent_face and best_score > 1.3 and best_ti != current_focus_idx and is_significantly_better:
                     if frame_idx - last_switch_frame >= min_switch_interval:
                         current_focus_idx = best_ti
                         last_switch_frame = frame_idx
             
-            # Use the focus coordinate of the active speaking track with a robust temporal fallback
             focus_track = ranked_tracks[current_focus_idx]
+            # Primary Preference: Detections in active track nearby
             valid_dets = [d for d in focus_track["detections"] if abs(d["frame"] - frame_idx) <= int(fps * 1.0)]
+            
             if valid_dets:
                 closest_det = min(valid_dets, key=lambda d: abs(d["frame"] - frame_idx))
                 target_cx = closest_det["cx"]
             else:
-                # CRITICAL FIX: If track is momentarily lost, STICK to its absolute closest detection EVER.
-                # Do not jump to global center! Jumping to center yields blank walls in dual interviews.
-                all_dets = focus_track["detections"]
-                if all_dets:
-                    closest_ever = min(all_dets, key=lambda d: abs(d["frame"] - frame_idx))
-                    target_cx = closest_ever["cx"]
+                # PRIMARY FALLBACK: Look globally for ANY track that is actually visible RIGHT NOW
+                # Prevents biasing towards a dead track's distant past/future coordinate.
+                present_dets = []
+                for trk in ranked_tracks[:8]:
+                    present_dets.extend([
+                        d for d in trk["detections"]
+                        if abs(d["frame"] - frame_idx) <= max(1, detect_every_n * 2)
+                    ])
+                
+                if present_dets:
+                    target_cx = min(present_dets, key=lambda d: abs(d["frame"] - frame_idx))["cx"]
                 else:
-                    # Ultra-fallback: Look globally for ANYTHING else
-                    local_dets = []
-                    for track in ranked_tracks:
-                        local_dets.extend([
-                            d for d in track["detections"]
-                            if abs(d["frame"] - frame_idx) <= int(fps * 0.5)
-                        ])
-                    if local_dets:
-                        closest_local_det = min(local_dets, key=lambda d: abs(d["frame"] - frame_idx))
-                        target_cx = closest_local_det["cx"]
+                    # SECONDARY FALLBACK: Stick to active track's absolute closest detection 
+                    all_dets = focus_track["detections"]
+                    if all_dets:
+                        target_cx = min(all_dets, key=lambda d: abs(d["frame"] - frame_idx))["cx"]
                     else:
                         target_cx = default_center
-
+ 
             keyframes[frame_idx] = _clamp(target_cx, min_center, max_center)
             keyframes_focus_id[frame_idx] = current_focus_idx
             
@@ -1096,8 +1096,13 @@ def draw_timestamp_pill(draw, out_w: int, out_h: int, current_time: float, alpha
     )
 
 
+_END_FRAME_CACHE = {}
+
 def generate_end_frame_canvas(out_w: int, out_h: int, metadata: dict):
     """Synthesize an attribution frame replicating the reference dark/gold cinematic layout."""
+    cache_key = (out_w, out_h, str(metadata.get("title", "unknown")), str(metadata.get("thumbnail_path", "")))
+    if cache_key in _END_FRAME_CACHE:
+        return _END_FRAME_CACHE[cache_key]
     import os
     import cv2
     import numpy as np
@@ -1261,7 +1266,9 @@ def generate_end_frame_canvas(out_w: int, out_h: int, metadata: dict):
     t_y = by1 + (by2 - by1 - bh) // 2 - 2
     draw.text((t_x, t_y), btn_txt, fill=WHITE, font=btn_font)
 
-    return cv2.cvtColor(np.array(canvas.convert("RGB")), cv2.COLOR_RGB2BGR)
+    result_img = cv2.cvtColor(np.array(canvas.convert("RGB")), cv2.COLOR_RGB2BGR)
+    _END_FRAME_CACHE[cache_key] = result_img
+    return result_img
 
 
 def _reframe_vertical(
@@ -1565,7 +1572,12 @@ def _reframe_vertical(
     has_end_frame = False
     if source_metadata:
         try:
-            print(f"[clip/local] Generating attribution end-card for '{source_metadata.get('title', 'source')}'...", flush=True)
+            cache_key = (out_w, out_h, str(source_metadata.get("title", "unknown")), str(source_metadata.get("thumbnail_path", "")))
+            if cache_key in _END_FRAME_CACHE:
+                print(f"[clip/local] Reusing cached attribution end-card for '{source_metadata.get('title', 'source')}'...", flush=True)
+            else:
+                print(f"[clip/local] Generating attribution end-card for '{source_metadata.get('title', 'source')}'...", flush=True)
+            
             end_frame_img = generate_end_frame_canvas(out_w, out_h, source_metadata)
             end_frames_count = int(2.0 * fps)
             for _ in range(end_frames_count):
