@@ -40,9 +40,9 @@ def _run_local(
     else:
         video_id = hashlib.md5(youtube_url.encode()).hexdigest()
 
-    os.makedirs("cache", exist_ok=True)
-    transcript_cache_path = os.path.join("cache", f"{video_id}_transcript.json")
-    highlights_cache_path = os.path.join("cache", f"{video_id}_highlights.json")
+    source_dir = os.path.dirname(source_path)
+    transcript_cache_path = os.path.join(source_dir, "transcript.json")
+    highlights_cache_path = os.path.join(source_dir, "highlights.json")
 
     # 1. Transcript Checkpoint
     if os.path.exists(transcript_cache_path):
@@ -94,10 +94,23 @@ def _run_local(
     except Exception as ex:
         print(f"[pipeline/local] Info: Metadata load failed ({ex})", flush=True)
 
+    # Modern layout logic: derive 'shorts' sibling directory if not in legacy root
+    from .config import LOCAL_OUTPUT_DIR
+    abs_source_dir = os.path.abspath(source_dir)
+    abs_root_output = os.path.abspath(LOCAL_OUTPUT_DIR)
+    
+    shorts_out_dir = None
+    if abs_source_dir != abs_root_output:
+        project_root = os.path.dirname(source_dir)
+        shorts_out_dir = os.path.join(project_root, "shorts")
+        os.makedirs(shorts_out_dir, exist_ok=True)
+        print(f"[pipeline/local] Targeting modern shorts container: {shorts_out_dir}", flush=True)
+
     shorts = crop_highlights_local(
         source_path,
         top,
         aspect_ratio=aspect_ratio,
+        out_dir=shorts_out_dir,
         transcript_segments=transcript["segments"],
         source_metadata=source_metadata,
     )

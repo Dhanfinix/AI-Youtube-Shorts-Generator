@@ -42,6 +42,7 @@ USE_GPU = os.getenv("USE_GPU", "true").lower() == "true"
 USE_SHOT_LOCK = os.getenv("USE_SHOT_LOCK", "false").lower() == "true"
 USE_ASS_SUBTITLES = os.getenv("USE_ASS_SUBTITLES", "true").lower() == "true"
 MIN_SHOT_DURATION = int(os.getenv("MIN_SHOT_DURATION", "90"))  # Default 3 seconds at 30 fps
+ENABLE_DYNAMIC_ZOOM = os.getenv("ENABLE_DYNAMIC_ZOOM", "true").lower() == "true"
 
 
 

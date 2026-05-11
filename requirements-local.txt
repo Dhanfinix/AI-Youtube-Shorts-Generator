@@ -8,4 +8,7 @@ opencv-python>=4.8.0
 # torch is only needed if you want CUDA Whisper. CPU works without it.
 # torch>=2.0
 mediapipe>=0.10.0,<0.10.15
+curl_cffi>=0.10.0,<0.15.0
 
+
+youtube-transcript-api>=1.2.4

@@ -61,8 +61,8 @@ def _format_for(fmt: str) -> str:
     except ValueError:
         height = 720
     return (
-        f"bestvideo[height<={height}]+bestaudio/"
-        f"best[height<={height}]/best"
+        f"bestvideo[height<={height}][ext=mp4]+bestaudio[ext=m4a]/"
+        f"best[height<={height}][ext=mp4]/best"
     )
 
 
@@ -346,13 +346,21 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
         video_id = video_url.split("shorts/")[1].split("?")[0]
         
     if video_id:
-        out_filename = f"source_{video_id}.mp4"
-        path = os.path.join(out_dir, out_filename)
-        meta_path = os.path.join(out_dir, f"source_{video_id}_metadata.json")
+        import glob
+        # NEW: Search recursively for the video ID inside the designated output directory hierarchy
+        found_files = []
+        # Pattern 1: Modern layout -> output/TITLE/source/source_ID.mp4
+        found_files.extend(glob.glob(os.path.join(out_dir, "**", "source", f"source_{video_id}.mp4"), recursive=True))
+        # Pattern 2: Legacy flat layout -> output/source_ID.mp4
+        found_files.extend(glob.glob(os.path.join(out_dir, f"source_{video_id}.mp4")))
         
-        if os.path.exists(path) and os.path.getsize(path) > 10000000:  # larger than 10MB
+        path = found_files[0] if found_files else None
+        
+        if path and os.path.exists(path) and os.path.getsize(path) > 10000000:  # larger than 10MB
+            source_dir = os.path.dirname(path)
             print(f"[download/local] High-quality source video already exists on disk: {path}.", flush=True)
             
+            meta_path = os.path.join(source_dir, f"source_{video_id}_metadata.json")
             # Lazy back-fill metadata if missing for cached file
             if not os.path.exists(meta_path):
                 print(f"[download/local] Metadata missing for cached file. Performing lazy metadata extraction...", flush=True)
@@ -362,14 +370,13 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
                         "no_warnings": True,
                         "skip_download": True,
                         "writethumbnail": True,
-                        "outtmpl": os.path.join(out_dir, "source_%(id)s.%(ext)s")
+                        # Anchor specifically to the cache location to maintain folder unity
+                        "outtmpl": os.path.join(source_dir, "source_%(id)s.%(ext)s")
                     }
                     with yt_dlp.YoutubeDL(meta_opts) as ydl:
-                        # download=True forces writethumbnail but skip_download=True skips payload
                         info = ydl.extract_info(video_url, download=True)
-                        _save_source_metadata(out_dir, info, video_id)
+                        _save_source_metadata(source_dir, info, video_id)
                 except Exception as me:
-                    print(f"[download/local] Lazy metadata extraction failed: {me}", flush=True)
                     print(f"[download/local] Lazy metadata extraction failed: {me}", flush=True)
             
             print(f"[download/local] Reusing existing file and metadata assets!", flush=True)
@@ -411,7 +418,7 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
 
     base_opts = {
         "format": _format_for(fmt),
-        "outtmpl": os.path.join(out_dir, "source_%(id)s.%(ext)s"),
+        "outtmpl": os.path.join(out_dir, "%(title)s", "source", "source_%(id)s.%(ext)s"),
         "merge_output_format": "mp4",
         "writethumbnail": True,
         "quiet": False,
@@ -442,6 +449,22 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
 
     all_errors = []
     
+    # Phase 0: Vanilla Strategy (Adapting the reference configuration that works out-of-the-box)
+    print(f"[download/local] Phase 0: Trying Vanilla Strategy (No custom extractor args)...", flush=True)
+    try:
+        vanilla_opts = base_opts.copy()
+        # Standard extraction without forcing player-clients or custom po-token providers
+        with yt_dlp.YoutubeDL(vanilla_opts) as ydl:
+            info = ydl.extract_info(video_url, download=True)
+            path = _resolve_output_path(ydl, info)
+            _save_source_metadata(os.path.dirname(path), info, info.get("id", ""))
+        print(f"[download/local] Phase 0 (Vanilla) SUCCEEDED! ready: {path}", flush=True)
+        return path
+    except Exception as verr:
+        clean_verr = str(verr).split("\n")[0]
+        print(f"[download/local] Phase 0 (Vanilla) failed ({clean_verr}). Resorting to fallback strategies...", flush=True)
+        all_errors.append(f"Phase 0 (Vanilla) -> {type(verr).__name__}: {clean_verr}")
+
     # Phase 1: Standard strategies
     for idx, strategy in enumerate(_FALLBACK_STRATEGIES):
         clients_label = strategy or (os.getenv("YT_DLP_PLAYER_CLIENTS") or "web_creator,default")
@@ -489,7 +512,7 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(video_url, download=True)
                     path = _resolve_output_path(ydl, info)
-                    _save_source_metadata(out_dir, info, info.get("id", ""))
+                    _save_source_metadata(os.path.dirname(path), info, info.get("id", ""))
                 print(f"[download/local] Strategy {idx}.{auth_idx} SUCCEEDED! ready: {path}", flush=True)
                 return path
             except Exception as err:
@@ -517,7 +540,7 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
             with yt_dlp.YoutubeDL(ydl_opts_browser) as ydl:
                 info = ydl.extract_info(video_url, download=True)
                 path = _resolve_output_path(ydl, info)
-                _save_source_metadata(out_dir, info, info.get("id", ""))
+                _save_source_metadata(os.path.dirname(path), info, info.get("id", ""))
             print(f"[download/local] Success via '{browser}' cookies! ready: {path}", flush=True)
             return path
         except Exception as berr:
@@ -581,8 +604,14 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
             
         if stream:
             print(f"[download/local] pytubefix: Stream located ({stream.resolution}). Direct injection downloading...", flush=True)
+            
+            # Build safe directory path manually for lifeboat edge case
+            yt_title_clean = yt.title.replace("/", "⧸").replace("\\", "⧸")
+            emergency_out_dir = os.path.join(out_dir, yt_title_clean, "source")
+            os.makedirs(emergency_out_dir, exist_ok=True)
+            
             final_filename = f"source_{yt.video_id}.mp4"
-            downloaded_path = stream.download(output_path=out_dir, filename=final_filename)
+            downloaded_path = stream.download(output_path=emergency_out_dir, filename=final_filename)
             
             # 4. Fetch Metadata & Thumbnail manually for consistency
             try:
@@ -590,7 +619,7 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
                 thumb_resp = requests.get(yt.thumbnail_url, timeout=10)
                 thumb_resp.raise_for_status()
                 thumb_filename = f"source_{yt.video_id}.jpg"
-                thumb_path = os.path.join(out_dir, thumb_filename)
+                thumb_path = os.path.join(emergency_out_dir, thumb_filename)
                 with open(thumb_path, 'wb') as f:
                     f.write(thumb_resp.content)
                 
@@ -601,7 +630,7 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
                     "uploader": yt.author,
                     "duration": yt.length
                 }
-                _save_source_metadata(out_dir, fake_info, yt.video_id)
+                _save_source_metadata(emergency_out_dir, fake_info, yt.video_id)
             except Exception as mfe:
                 print(f"[download/local] Minor: Failed to download lifeboat thumbnail/metadata ({mfe})", flush=True)
                 

@@ -11,7 +11,7 @@ import subprocess
 from statistics import median
 from typing import Dict, List, Optional, Sequence
 
-from ..config import LOCAL_OUTPUT_DIR
+from ..config import LOCAL_OUTPUT_DIR, ENABLE_DYNAMIC_ZOOM
 
 
 def _ratio(aspect_ratio: str) -> float:
@@ -1353,76 +1353,68 @@ def _reframe_vertical(
 
     # ─── DYNAMIC ZOOM PRE-COMPUTATION (Matches React logic) ────────────────
     zoom_trajectory = [1.0] * total_main_frames
-    try:
-        import math
-        active_pts = []
-        cur_z = 1.0
-        last_z_time = 0.0
-        MIN_DWELL = 8.0  # Increased to reduce ping-ponging between states
-        
-        for w in word_captions:
-            txt = w["word"].strip()
-            # Find sentence endings to establish potential hard cuts
-            is_p = any(txt.endswith(char) for char in [".", "!", "?"])
-            rel_t = float(w["end"]) - start_time
-            if is_p and (rel_t - last_z_time >= MIN_DWELL):
-                cur_z = 1.12 if cur_z == 1.0 else 1.0
-                active_pts.append((rel_t, cur_z))
-                last_z_time = rel_t
-                
-        # Stage 1: Fill base steps
-        pt_idx = 0
-        cur_val = 1.0
-        for f in range(len(zoom_trajectory)):
-            f_t = f / fps
-            while pt_idx < len(active_pts) and f_t >= active_pts[pt_idx][0]:
-                cur_val = active_pts[pt_idx][1]
-                pt_idx += 1
-            zoom_trajectory[f] = cur_val
+    if ENABLE_DYNAMIC_ZOOM:
+        try:
+            import math
+            active_pts = []
+            cur_z = 1.0
+            last_z_time = 0.0
+            MIN_DWELL = 8.0  # Increased to reduce ping-ponging between states
             
-        # Stage 2: Advanced cinematic phasing 
-        #   - Zoom In: Interpolate BACKWARD so full zoom is achieved BEFORE sentence starts.
-        #   - Zoom Out: Interpolate FORWARD so camera only pulls away AFTER sentence ends.
-        RAMP_DUR = 1.5  # slow-push cinematic feel
-        RAMP_FRAMES = int(RAMP_DUR * fps)
-        
-        i = 1
-        while i < len(zoom_trajectory):
-            diff = zoom_trajectory[i] - zoom_trajectory[i-1]
-            
-            if abs(diff) > 0.01:
-                base_v = zoom_trajectory[i-1]
-                target_v = zoom_trajectory[i]
-                
-                if diff > 0: # ── UPWARD: Zoom In (Apply BEFORE trigger) ────────────────
-                    # Reach target_v EXACTLY at frame 'i'. 
-                    # We walk backwards for RAMP_FRAMES and fill in values.
-                    for k in range(RAMP_FRAMES):
-                        idx = i - 1 - k
-                        if idx < 0: break
-                        
-                        # Progress goes from 0 at (i - RAMP_FRAMES) to 1 at (i)
-                        prog = (RAMP_FRAMES - k - 1) / RAMP_FRAMES
-                        eased = (1 - math.cos(prog * math.pi)) / 2
-                        # We write ONLY if it doesn't disrupt a previous ramp (unlikely due to MIN_DWELL)
-                        zoom_trajectory[idx] = base_v + (target_v - base_v) * eased
-                    i += 1 # No skip needed for forward iteration, step consumed
+            for w in word_captions:
+                txt = w["word"].strip()
+                # Find sentence endings to establish potential hard cuts
+                is_p = any(txt.endswith(char) for char in [".", "!", "?"])
+                rel_t = float(w["end"]) - start_time
+                if is_p and (rel_t - last_z_time >= MIN_DWELL):
+                    cur_z = 1.12 if cur_z == 1.0 else 1.0
+                    active_pts.append((rel_t, cur_z))
+                    last_z_time = rel_t
                     
-                else: # ── DOWNWARD: Zoom Out (Apply AFTER trigger) ───────────────
-                    # Hold target_v's ramp departure start EXACTLY at frame 'i'.
-                    for k in range(RAMP_FRAMES):
-                        idx = i + k
-                        if idx >= len(zoom_trajectory): break
-                        if abs(zoom_trajectory[idx] - target_v) > 0.1: break # Hit next event early? Abort.
+            # Stage 1: Fill base steps
+            pt_idx = 0
+            cur_val = 1.0
+            for f in range(len(zoom_trajectory)):
+                f_t = f / fps
+                while pt_idx < len(active_pts) and f_t >= active_pts[pt_idx][0]:
+                    cur_val = active_pts[pt_idx][1]
+                    pt_idx += 1
+                zoom_trajectory[f] = cur_val
+                
+            # Stage 2: Advanced cinematic phasing 
+            RAMP_DUR = 1.5  # slow-push cinematic feel
+            RAMP_FRAMES = int(RAMP_DUR * fps)
+            
+            i = 1
+            while i < len(zoom_trajectory):
+                diff = zoom_trajectory[i] - zoom_trajectory[i-1]
+                
+                if abs(diff) > 0.01:
+                    base_v = zoom_trajectory[i-1]
+                    target_v = zoom_trajectory[i]
+                    
+                    if diff > 0: # ── UPWARD: Zoom In (Apply BEFORE trigger) ────────────────
+                        for k in range(RAMP_FRAMES):
+                            idx = i - 1 - k
+                            if idx < 0: break
+                            prog = (RAMP_FRAMES - k - 1) / RAMP_FRAMES
+                            eased = (1 - math.cos(prog * math.pi)) / 2
+                            zoom_trajectory[idx] = base_v + (target_v - base_v) * eased
+                        i += 1
                         
-                        prog = (k + 1) / RAMP_FRAMES
-                        eased = (1 - math.cos(prog * math.pi)) / 2
-                        zoom_trajectory[idx] = base_v + (target_v - base_v) * eased
-                    i += RAMP_FRAMES # Skip iterator forward to prevent recursive edge detections
-            else:
-                i += 1
-    except Exception:
-        pass
+                    else: # ── DOWNWARD: Zoom Out (Apply AFTER trigger) ───────────────
+                        for k in range(RAMP_FRAMES):
+                            idx = i + k
+                            if idx >= len(zoom_trajectory): break
+                            if abs(zoom_trajectory[idx] - target_v) > 0.1: break
+                            prog = (k + 1) / RAMP_FRAMES
+                            eased = (1 - math.cos(prog * math.pi)) / 2
+                            zoom_trajectory[idx] = base_v + (target_v - base_v) * eased
+                        i += RAMP_FRAMES
+                else:
+                    i += 1
+        except Exception:
+            pass
 
     # Reset to beginning for the actual frame-writing pass
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
