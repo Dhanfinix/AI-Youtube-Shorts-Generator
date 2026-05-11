@@ -37,7 +37,6 @@ LOCAL_WHISPER_DEVICE = os.getenv("LOCAL_WHISPER_DEVICE", "auto")  # auto / cpu /
 LOCAL_TRANSCRIBER_PRIORITY = os.getenv("LOCAL_TRANSCRIBER_PRIORITY", "youtube").strip().lower()  # youtube / whisper
 LOCAL_TARGET_LANGUAGE = os.getenv("LOCAL_TARGET_LANGUAGE", "auto").strip().lower()  # auto / id / en / etc.
 LOCAL_OUTPUT_DIR = os.getenv("LOCAL_OUTPUT_DIR", "output")
-USE_REMOTION = os.getenv("USE_REMOTION", "false").lower() == "true"
 LOCAL_FACE_DETECTOR = os.getenv("LOCAL_FACE_DETECTOR", "opencv-haar").strip().lower()  # opencv-haar / mediapipe / mediapipe-mesh
 USE_GPU = os.getenv("USE_GPU", "true").lower() == "true"
 USE_SHOT_LOCK = os.getenv("USE_SHOT_LOCK", "false").lower() == "true"

@@ -74,12 +74,18 @@ def _get_word_captions(segments: List[Dict], start_time: float, end_time: float)
             for w in s["words"]:
                 w_start = float(w["start"])
                 w_end = float(w["end"])
-                if w_end < start_time or w_start > end_time:
+                
+                # Clamp word times strictly to the subclip window bounds
+                eff_start = max(start_time, w_start)
+                eff_end = min(end_time, w_end)
+                
+                if eff_end <= eff_start or eff_end < start_time or eff_start > end_time:
                     continue
+                    
                 words.append({
                     "word": w["word"].strip().upper(),
-                    "start": w_start,
-                    "end": w_end,
+                    "start": eff_start,
+                    "end": eff_end,
                 })
         else:
             # Fallback: distribute words evenly across segment duration
@@ -292,7 +298,7 @@ def _format_time(seconds: float) -> str:
     return f"{hours}:{minutes:02d}:{secs:02d}.{centisecs:02d}"
 
 
-def _create_ass_subtitle_capcut(word_captions: List[Dict], output_path: str, offset: float = 0.0):
+def _create_ass_subtitle_capcut(word_captions: List[Dict], output_path: str, offset: float = 0.0, max_duration: float = None):
     """Create an ASS subtitle file with word-by-word active yellow highlighting."""
     ass_content = """[Script Info]
 Title: Auto-generated captions
@@ -321,8 +327,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             word_start = current_word["start"] - offset
             word_end = current_word["end"] - offset
             
+            # Hard enforcement against leaking into end-card frames
+            if max_duration is not None:
+                # Subtract tiny 0.05s margin for aesthetic cutoff
+                effective_limit = max_duration - 0.05 
+                word_start = min(word_start, effective_limit)
+                word_end = min(word_end, effective_limit)
+            
             # Hide subtitle if it falls entirely within the first 0.8 seconds (thumbnail teaser period)
-            if word_end <= 0.8:
+            if word_end <= 0.8 or word_start >= word_end:
                 continue
             
             # Clamp starting time if it overlaps with the first 0.8 seconds
@@ -1330,19 +1343,92 @@ def _reframe_vertical(
         silent_path
     ]
     writer_proc = subprocess.Popen(cmd_ffmpeg, stdin=subprocess.PIPE)
-    y0 = int((src_h - crop_h) // 2)
+    y0_default = int((src_h - crop_h) // 2)
+
+    # Pre-calculate frame count for trajectory safety
+    cap_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    total_main_frames = len(focus_trajectory) if focus_trajectory else cap_frames
+    if not total_main_frames:
+        total_main_frames = cap_frames
+
+    # ─── DYNAMIC ZOOM PRE-COMPUTATION (Matches React logic) ────────────────
+    zoom_trajectory = [1.0] * total_main_frames
+    try:
+        import math
+        active_pts = []
+        cur_z = 1.0
+        last_z_time = 0.0
+        MIN_DWELL = 8.0  # Increased to reduce ping-ponging between states
+        
+        for w in word_captions:
+            txt = w["word"].strip()
+            # Find sentence endings to establish potential hard cuts
+            is_p = any(txt.endswith(char) for char in [".", "!", "?"])
+            rel_t = float(w["end"]) - start_time
+            if is_p and (rel_t - last_z_time >= MIN_DWELL):
+                cur_z = 1.12 if cur_z == 1.0 else 1.0
+                active_pts.append((rel_t, cur_z))
+                last_z_time = rel_t
+                
+        # Stage 1: Fill base steps
+        pt_idx = 0
+        cur_val = 1.0
+        for f in range(len(zoom_trajectory)):
+            f_t = f / fps
+            while pt_idx < len(active_pts) and f_t >= active_pts[pt_idx][0]:
+                cur_val = active_pts[pt_idx][1]
+                pt_idx += 1
+            zoom_trajectory[f] = cur_val
+            
+        # Stage 2: Advanced cinematic phasing 
+        #   - Zoom In: Interpolate BACKWARD so full zoom is achieved BEFORE sentence starts.
+        #   - Zoom Out: Interpolate FORWARD so camera only pulls away AFTER sentence ends.
+        RAMP_DUR = 1.5  # slow-push cinematic feel
+        RAMP_FRAMES = int(RAMP_DUR * fps)
+        
+        i = 1
+        while i < len(zoom_trajectory):
+            diff = zoom_trajectory[i] - zoom_trajectory[i-1]
+            
+            if abs(diff) > 0.01:
+                base_v = zoom_trajectory[i-1]
+                target_v = zoom_trajectory[i]
+                
+                if diff > 0: # ── UPWARD: Zoom In (Apply BEFORE trigger) ────────────────
+                    # Reach target_v EXACTLY at frame 'i'. 
+                    # We walk backwards for RAMP_FRAMES and fill in values.
+                    for k in range(RAMP_FRAMES):
+                        idx = i - 1 - k
+                        if idx < 0: break
+                        
+                        # Progress goes from 0 at (i - RAMP_FRAMES) to 1 at (i)
+                        prog = (RAMP_FRAMES - k - 1) / RAMP_FRAMES
+                        eased = (1 - math.cos(prog * math.pi)) / 2
+                        # We write ONLY if it doesn't disrupt a previous ramp (unlikely due to MIN_DWELL)
+                        zoom_trajectory[idx] = base_v + (target_v - base_v) * eased
+                    i += 1 # No skip needed for forward iteration, step consumed
+                    
+                else: # ── DOWNWARD: Zoom Out (Apply AFTER trigger) ───────────────
+                    # Hold target_v's ramp departure start EXACTLY at frame 'i'.
+                    for k in range(RAMP_FRAMES):
+                        idx = i + k
+                        if idx >= len(zoom_trajectory): break
+                        if abs(zoom_trajectory[idx] - target_v) > 0.1: break # Hit next event early? Abort.
+                        
+                        prog = (k + 1) / RAMP_FRAMES
+                        eased = (1 - math.cos(prog * math.pi)) / 2
+                        zoom_trajectory[idx] = base_v + (target_v - base_v) * eased
+                    i += RAMP_FRAMES # Skip iterator forward to prevent recursive edge detections
+            else:
+                i += 1
+    except Exception:
+        pass
 
     # Reset to beginning for the actual frame-writing pass
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
     frame_idx = 0
     teaser_frames = int(round(0.8 * fps))
-    total_main_frames = len(focus_trajectory) if focus_trajectory else 0
-    
-    # Pre-calculate total frames to read from capture if focus_trajectory somehow missing
-    if not total_main_frames:
-        total_main_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        
     last_active_word = None
 
     while True:
@@ -1355,15 +1441,31 @@ def _reframe_vertical(
             current_time = start_time + (msec / 1000.0)
         else:
             current_time = start_time + (frame_idx / fps)
+            
+        # Get dynamics for current frame
+        idx_safe = min(frame_idx, len(zoom_trajectory) - 1)
+        z_lvl = zoom_trajectory[idx_safe]
+        
         if focus_trajectory:
             center_x = focus_trajectory[min(frame_idx, len(focus_trajectory) - 1)]
         else:
             center_x = src_w / 2.0
-        x0 = int(round(center_x - crop_w / 2.0))
-        x0 = max(0, min(src_w - crop_w, x0))
+            
+        # Calculate dynamically zoomed crop dimensions
+        dyn_w = int(crop_w / z_lvl)
+        dyn_h = int(crop_h / z_lvl)
+        
+        # Compute bounds and clamp
+        x0 = int(round(center_x - dyn_w / 2.0))
+        x0 = max(0, min(src_w - dyn_w, x0))
+        
+        # Vertical framing: target slightly above dead-center (40%) to capture face height well
+        ideal_y = src_h * 0.4
+        y0 = int(round(ideal_y - dyn_h / 2.0))
+        y0 = max(0, min(src_h - dyn_h, y0))
+        
         frame_idx += 1
-
-        cropped = frame[y0:y0 + crop_h, x0:x0 + crop_w]
+        cropped = frame[y0:y0 + dyn_h, x0:x0 + dyn_w]
 
         # Upscale cropped frame to standard crisp Full HD (1080x1920) before drawing overlays
         if out_w != crop_w or out_h != crop_h:
@@ -1512,61 +1614,7 @@ def _reframe_vertical(
     return out_path
 
 
-def _render_with_remotion(
-    cropped_video_path: str,
-    word_captions: List[Dict],
-    out_path: str,
-    duration_sec: float,
-    fps: float,
-    title: Optional[str] = None,
-    clip_start_time: float = 0.0,
-) -> None:
-    """Invokes the Remotion CLI to render premium bouncing titles and progress overlays."""
-    import json
-    import tempfile
 
-    # Use the clip's start_time as base — NOT the first word's timestamp.
-    # The cropped video's frame 0 corresponds to clip_start_time in the
-    # original video, so all subtitle times must be relative to that.
-    base_time = clip_start_time
-    formatted_subtitles = []
-    for w in word_captions:
-        start_rel = max(0.0, w["start"] - base_time)
-        end_rel = max(0.0, w["end"] - base_time)
-        formatted_subtitles.append({
-            "word": w["word"],
-            "start": start_rel,
-            "end": end_rel,
-        })
-
-    props = {
-        "videoUrl": os.path.relpath(os.path.abspath(cropped_video_path), os.path.abspath(".")),
-        "subtitles": formatted_subtitles,
-        "fps": fps,
-        "title": title or "",
-    }
-
-    props_fd, props_path = tempfile.mkstemp(suffix=".json")
-    try:
-        with os.fdopen(props_fd, "w") as f:
-            json.dump(props, f)
-
-        # Remotion composition is hardcoded at 30fps (Root.tsx).
-        # duration_frames must match that, NOT the native video fps.
-        REMOTION_FPS = 30
-        duration_frames = int(duration_sec * REMOTION_FPS)
-        cmd = [
-            "npx", "remotion", "render", "Shorts",
-            os.path.abspath(out_path),
-            f"--props={props_path}",
-            f"--frames=0-{duration_frames}",
-            "--browser=chrome",
-        ]
-        renderer_dir = os.path.abspath("shorts_renderer")
-        subprocess.run(cmd, cwd=renderer_dir, check=True)
-    finally:
-        if os.path.exists(props_path):
-            os.remove(props_path)
 
 
 def crop_clip_local(
@@ -1583,70 +1631,53 @@ def crop_clip_local(
     cut_path = out_path + ".cut.mp4"
     word_captions = _get_word_captions(transcript_segments or [], start_time, end_time)
     
-    from ..config import USE_REMOTION
+    from shorts_generator.config import USE_ASS_SUBTITLES, USE_GPU
+    from shorts_generator.local.gpu_detector import GPUDetector
+    import tempfile
     
     try:
         _cut_subclip(source_path, start_time, end_time, cut_path)
-        if USE_REMOTION and os.path.exists("shorts_renderer"):
-            clean_cropped_path = out_path + ".clean.mp4"
-            _reframe_vertical(cut_path, clean_cropped_path, aspect_ratio, start_time, word_captions, draw_subtitles=False, title=title, source_metadata=source_metadata)
-            
-            duration_sec = end_time - start_time
-            fps = 30.0
-            import cv2  # type: ignore
-            cap = cv2.VideoCapture(clean_cropped_path)
-            if cap.isOpened():
-                fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-                cap.release()
-
-            _render_with_remotion(clean_cropped_path, word_captions, out_path, duration_sec, fps, title=title, clip_start_time=start_time)
-            if os.path.exists(clean_cropped_path):
-                os.remove(clean_cropped_path)
-        else:
-            from shorts_generator.config import USE_ASS_SUBTITLES, USE_GPU
-            from shorts_generator.local.gpu_detector import GPUDetector
-            import tempfile
-            
-            if USE_ASS_SUBTITLES:
-                reframed_clean_path = out_path + ".clean_reframed.mp4"
-                ass_file = f"temp_subtitles_{int(start_time)}.ass"
-                try:
-                    # 1. Reframe vertical with subtitle drawing disabled (extremely fast!)
-                    _reframe_vertical(cut_path, reframed_clean_path, aspect_ratio, start_time, word_captions, draw_subtitles=False, title=title, source_metadata=source_metadata)
-                    
-                    # 2. Build the ASS subtitle file with CapCut word-highlighting
-                    _create_ass_subtitle_capcut(word_captions, ass_file, start_time)
-                    
-                    # 3. Burn captions via FFmpeg (with optional hardware encoder!)
-                    gpu_det = GPUDetector()
-                    encoder_args = gpu_det.get_encoder_args(use_gpu=USE_GPU)
-                    
-                    cmd = [
-                        _get_ffmpeg_path(), "-y", "-loglevel", "error",
-                        "-i", reframed_clean_path,
-                        "-vf", f"ass=filename={ass_file}",
-                        *encoder_args,
-                        "-c:a", "copy",
-                        out_path
-                    ]
-                    subprocess.run(cmd, check=True)
-                    
-                    # Cleanup
-                    if os.path.exists(ass_file):
-                        os.unlink(ass_file)
-                    if os.path.exists(reframed_clean_path):
-                        os.remove(reframed_clean_path)
-                except Exception as e:
-                    print(f"[clip/local] ASS burning failed ({e}); falling back to PIL-based drawing", flush=True)
-                    if os.path.exists(ass_file):
-                        try: os.unlink(ass_file)
-                        except Exception: pass
-                    if os.path.exists(reframed_clean_path):
-                        try: os.remove(reframed_clean_path)
-                        except Exception: pass
-                    _reframe_vertical(cut_path, out_path, aspect_ratio, start_time, word_captions, draw_subtitles=True, title=title, source_metadata=source_metadata)
-            else:
+        
+        if USE_ASS_SUBTITLES:
+            reframed_clean_path = out_path + ".clean_reframed.mp4"
+            ass_file = f"temp_subtitles_{int(start_time)}.ass"
+            try:
+                # 1. Reframe vertical with subtitle drawing disabled (extremely fast!)
+                _reframe_vertical(cut_path, reframed_clean_path, aspect_ratio, start_time, word_captions, draw_subtitles=False, title=title, source_metadata=source_metadata)
+                
+                # 2. Build the ASS subtitle file with CapCut word-highlighting
+                _create_ass_subtitle_capcut(word_captions, ass_file, start_time, max_duration=(end_time - start_time))
+                
+                # 3. Burn captions via FFmpeg (with optional hardware encoder!)
+                gpu_det = GPUDetector()
+                encoder_args = gpu_det.get_encoder_args(use_gpu=USE_GPU)
+                
+                cmd = [
+                    _get_ffmpeg_path(), "-y", "-loglevel", "error",
+                    "-i", reframed_clean_path,
+                    "-vf", f"ass=filename={ass_file}",
+                    *encoder_args,
+                    "-c:a", "copy",
+                    out_path
+                ]
+                subprocess.run(cmd, check=True)
+                
+                # Cleanup
+                if os.path.exists(ass_file):
+                    os.unlink(ass_file)
+                if os.path.exists(reframed_clean_path):
+                    os.remove(reframed_clean_path)
+            except Exception as e:
+                print(f"[clip/local] ASS burning failed ({e}); falling back to PIL-based drawing", flush=True)
+                if os.path.exists(ass_file):
+                    try: os.unlink(ass_file)
+                    except Exception: pass
+                if os.path.exists(reframed_clean_path):
+                    try: os.remove(reframed_clean_path)
+                    except Exception: pass
                 _reframe_vertical(cut_path, out_path, aspect_ratio, start_time, word_captions, draw_subtitles=True, title=title, source_metadata=source_metadata)
+        else:
+            _reframe_vertical(cut_path, out_path, aspect_ratio, start_time, word_captions, draw_subtitles=True, title=title, source_metadata=source_metadata)
     finally:
         if os.path.exists(cut_path):
             os.remove(cut_path)
@@ -1686,6 +1717,30 @@ def crop_highlights_local(
             
             # SIDE-CAR HELPER: Create a handy copy-paste friendly text file with metadata for posting!
             try:
+                # Precompute zoom events for the log file using exact same logic as the renderer
+                sim_words = []
+                if transcript_segments:
+                    sim_words = _get_word_captions(transcript_segments, float(h["start_time"]), float(h["end_time"]))
+                
+                zoom_events = []
+                cur_zoom = 1.0
+                last_time = 0.0
+                MIN_DWELL = 8.0  # MUST match the engine value
+                base_time = float(h["start_time"])
+
+                for w in sim_words:
+                    w_text = w["word"].strip()
+                    is_punc = any(w_text.endswith(p) for p in [".", "!", "?"])
+                    w_rel_end = float(w["end"]) - base_time
+                    if is_punc and (w_rel_end - last_time >= MIN_DWELL):
+                        if cur_zoom == 1.0:
+                            cur_zoom = 1.12
+                            zoom_events.append(f"T={w_rel_end:.2f}s: Word \"{w_text}\" -> SMOOTH ZOOM IN to 1.12x")
+                        else:
+                            cur_zoom = 1.0
+                            zoom_events.append(f"T={w_rel_end:.2f}s: Word \"{w_text}\" -> SMOOTH ZOOM OUT to 1.0x")
+                        last_time = w_rel_end
+
                 txt_path = os.path.splitext(out_path)[0] + ".txt"
                 with open(txt_path, "w", encoding="utf-8") as f:
                     f.write("==================================================\n")
@@ -1697,7 +1752,13 @@ def crop_highlights_local(
                     f.write("--- METADATA INTERNAL ---\n")
                     f.write(f"💡 [NOTE PEMBUAT / WHY VIRAL]: {h.get('virality_reason', 'N/A')}\n")
                     f.write(f"🔥 [VIRAL SCORE]: {h.get('score', 'N/A')}/100\n\n")
-                    f.write("==================================================\n")
+                    f.write("🔍 [DYNAMICS DEBUG - SMART ZOOM]\n")
+                    if zoom_events:
+                        for event in zoom_events:
+                            f.write(f"  ⚡ {event}\n")
+                    else:
+                        f.write("  (No zoom triggers met the 8s cooldown threshold criteria)\n")
+                    f.write("\n==================================================\n")
                     f.write("Ready to copy and paste for Shorts / Reels / TikTok!\n")
                 print(f"[clip/local] Created companion metadata: {os.path.basename(txt_path)}", flush=True)
             except Exception as te:
