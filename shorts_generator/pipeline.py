@@ -5,6 +5,7 @@ to process video pipelines entirely on this machine.
 """
 import os
 import re
+import sys
 import json
 import hashlib
 from typing import Dict, List, Optional
@@ -24,6 +25,7 @@ def generate_shorts(
     download_format: str = "720",
     language: Optional[str] = None,
     mode: Optional[str] = None,  # Deprecated: now defaults to "local" internally
+    interactive: bool = False,
 ) -> Dict:
     """Run the local processing pipeline and return structured results.
 
@@ -94,9 +96,48 @@ def generate_shorts(
     if not all_highlights:
         raise RuntimeError("Highlight generator returned zero clips.")
 
-    top = sorted(all_highlights, key=lambda h: int(h.get("score", 0)), reverse=True)
-    if num_clips > 0:
-        top = top[:num_clips]
+    # Sort candidates globally by score
+    sorted_candidates = sorted(all_highlights, key=lambda h: int(h.get("score", 0)), reverse=True)
+    
+    top = sorted_candidates
+    if interactive:
+        print("\n" + "🔥" * 25)
+        print("       SELECT HIGHLIGHTS TO CLIP")
+        print("🔥" * 25)
+        for idx, h in enumerate(sorted_candidates, 1):
+            score = h.get("score", 0)
+            start = float(h.get("start_time", 0))
+            end = float(h.get("end_time", 0))
+            title = h.get("title", "Untitled")
+            print(f"[{idx:2}] ⭐ {score:3} | {start:6.1f}s ➔ {end:6.1f}s | {title}")
+            
+        print("\n👉 Enter numbers to render (comma or space separated), e.g., '1 3 5'")
+        print("👉 Type 'all' to render every candidate available")
+        print("👉 Press Ctrl+C to cancel process completely")
+        print(f"👉 Or press [ENTER] to proceed with top {num_clips} defaults:")
+        try:
+            choice = input("\nChoice > ").strip().lower()
+            if choice:
+                if choice == "all":
+                    top = sorted_candidates
+                    print(f"[pipeline] Selected ALL {len(top)} candidates.", flush=True)
+                else:
+                    tokens = re.split(r'[,\s]+', choice)
+                    indices = [int(t) - 1 for t in tokens if t.isdigit()]
+                    top = [sorted_candidates[i] for i in indices if 0 <= i < len(sorted_candidates)]
+                    if not top:
+                        print("[pipeline] No valid selection found. Falling back to default.", flush=True)
+                        top = sorted_candidates[:num_clips] if num_clips > 0 else sorted_candidates
+                    else:
+                        print(f"[pipeline] User locked {len(top)} specific clips for rendering.", flush=True)
+            else:
+                top = sorted_candidates[:num_clips] if num_clips > 0 else sorted_candidates
+        except Exception as e:
+            print(f"[pipeline] Selection error ({e}). Using defaults.", flush=True)
+            top = sorted_candidates[:num_clips] if num_clips > 0 else sorted_candidates
+    else:
+        if num_clips > 0:
+            top = sorted_candidates[:num_clips]
     print(f"[pipeline] cropping {len(top)} of {len(all_highlights)} candidates", flush=True)
 
     # Load Metadata Sidecar for visual attribution

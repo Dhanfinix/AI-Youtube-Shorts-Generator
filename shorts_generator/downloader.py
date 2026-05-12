@@ -364,3 +364,28 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
     except Exception as e:
         clean_msg = str(e).split("\n")[0]
         raise RuntimeError(f"Download failed: {clean_msg}. Please verify cookies/proxy settings.")
+
+
+def lookup_youtube_url_by_title(title: str) -> Optional[str]:
+    """Perform an instant, zero-download yt-dlp search to resolve accurate target URL."""
+    try:
+        yt_dlp = _import_ytdlp()
+        # Configure for absolutely maximum speed flat list ingestion
+        opts = {
+            "skip_download": True,
+            "quiet": True,
+            "no_warnings": True,
+            "extract_flat": True,
+            "noprogress": True,
+        }
+        search_query = f"ytsearch1:{title}"
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(search_query, download=False)
+            if info and "entries" in info and len(info["entries"]) > 0:
+                first_entry = info["entries"][0]
+                vid = first_entry.get("id")
+                if vid:
+                    return f"https://www.youtube.com/watch?v={vid}"
+    except Exception:
+        pass
+    return None
