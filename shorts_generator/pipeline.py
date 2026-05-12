@@ -1,35 +1,51 @@
-"""End-to-end orchestrator.
+"""End-to-end orchestrator for generating clips locally.
 
-Two modes:
-  * mode="api"   (default) — MuAPI does download / transcribe / LLM / autocrop.
-                              Fast, no local deps, pay-per-call.
-  * mode="local"            — yt-dlp + faster-whisper + OpenAI + ffmpeg/opencv.
-                              Self-hosted, OPENAI_API_KEY required for the LLM.
+Utilizes yt-dlp, faster-whisper, direct LLM calls (OpenAI/Gemini), and MoviePy/OpenCV
+to process video pipelines entirely on this machine.
 """
+import os
+import re
+import json
+import hashlib
 from typing import Dict, List, Optional
 
-from .clipper import crop_highlights
-from .downloader import download_youtube
-from .highlights import call_muapi_llm, get_highlights
-from .transcriber import transcribe
+from .highlights import get_highlights
+from .config import LOCAL_OUTPUT_DIR
+from .clipper import crop_highlights_local
+from .downloader import download_youtube_local
+from .llm import call_openai_llm
+from .transcriber import transcribe_local
 
 
-def _run_local(
+def generate_shorts(
     youtube_url: str,
-    num_clips: int,
-    aspect_ratio: str,
-    download_format: str,
-    language: Optional[str],
+    num_clips: int = 3,
+    aspect_ratio: str = "9:16",
+    download_format: str = "720",
+    language: Optional[str] = None,
+    mode: Optional[str] = None,  # Deprecated: now defaults to "local" internally
 ) -> Dict:
-    import os
-    import re
-    import json
-    import hashlib
-    from .local.clipper import crop_highlights_local
-    from .local.downloader import download_youtube_local
-    from .local.llm import call_openai_llm
-    from .local.transcriber import transcribe_local
+    """Run the local processing pipeline and return structured results.
 
+    Args:
+        youtube_url: source YouTube video URL.
+        num_clips: how many shorts to render (use 0 for all found).
+        aspect_ratio: target aspect ratio, e.g. "9:16", "1:1".
+        download_format: source resolution ("360" / "480" / "720" / "1080").
+        language: optional ISO-639-1 code to force Whisper language.
+        mode: Deprecated. The pipeline is now exclusively local.
+
+    Returns:
+        {
+          "mode": "local",
+          "source_video_url": str,   # Path to local source file
+          "transcript": {...},
+          "highlights": [...],       # Ranked highlight candidate array
+          "shorts": [...],           # Array of rendered clips
+        }
+    """
+    print(f"[pipeline] Starting local short generation for: {youtube_url}", flush=True)
+    
     source_path = download_youtube_local(youtube_url, fmt=download_format)
 
     # Extract Video ID for persistent checkpoint/caching
@@ -66,6 +82,8 @@ def _run_local(
         with open(highlights_cache_path, "r") as f:
             highlights_result = json.load(f)
     else:
+        # get_highlights can pull default llm from inside highlights.py now, 
+        # but we explicitly inject call_openai_llm here for continuity.
         highlights_result = get_highlights(transcript, num_clips=num_clips, llm_fn=call_openai_llm)
         all_highlights = highlights_result.get("highlights", [])
         if all_highlights:
@@ -79,7 +97,7 @@ def _run_local(
     top = sorted(all_highlights, key=lambda h: int(h.get("score", 0)), reverse=True)
     if num_clips > 0:
         top = top[:num_clips]
-    print(f"[pipeline/local] cropping {len(top)} of {len(all_highlights)} candidates", flush=True)
+    print(f"[pipeline] cropping {len(top)} of {len(all_highlights)} candidates", flush=True)
 
     # Load Metadata Sidecar for visual attribution
     source_metadata = {}
@@ -88,14 +106,13 @@ def _run_local(
         src_stem = os.path.splitext(os.path.basename(source_path))[0]
         meta_path = os.path.join(src_dir, f"{src_stem}_metadata.json")
         if os.path.exists(meta_path):
-            print(f"[pipeline/local] Attaching source attribution metadata for rendering...", flush=True)
+            print(f"[pipeline] Attaching source attribution metadata for rendering...", flush=True)
             with open(meta_path, "r", encoding="utf-8") as mf:
                 source_metadata = json.load(mf)
     except Exception as ex:
-        print(f"[pipeline/local] Info: Metadata load failed ({ex})", flush=True)
+        print(f"[pipeline] Info: Metadata load failed ({ex})", flush=True)
 
     # Modern layout logic: derive 'shorts' sibling directory if not in legacy root
-    from .config import LOCAL_OUTPUT_DIR
     abs_source_dir = os.path.abspath(source_dir)
     abs_root_output = os.path.abspath(LOCAL_OUTPUT_DIR)
     
@@ -104,7 +121,7 @@ def _run_local(
         project_root = os.path.dirname(source_dir)
         shorts_out_dir = os.path.join(project_root, "shorts")
         os.makedirs(shorts_out_dir, exist_ok=True)
-        print(f"[pipeline/local] Targeting modern shorts container: {shorts_out_dir}", flush=True)
+        print(f"[pipeline] Targeting modern shorts container: {shorts_out_dir}", flush=True)
 
     shorts = crop_highlights_local(
         source_path,
@@ -123,74 +140,3 @@ def _run_local(
         "shorts": shorts,
     }
 
-
-def _run_api(
-    youtube_url: str,
-    num_clips: int,
-    aspect_ratio: str,
-    download_format: str,
-    language: Optional[str],
-) -> Dict:
-    source_url = download_youtube(youtube_url, fmt=download_format)
-
-    transcript = transcribe(source_url, language=language)
-    if not transcript["segments"]:
-        raise RuntimeError(
-            "Whisper produced no segments. The video may have no detectable speech."
-        )
-
-    highlights_result = get_highlights(transcript, num_clips=num_clips, llm_fn=call_muapi_llm)
-    all_highlights: List[Dict] = highlights_result.get("highlights", [])
-    if not all_highlights:
-        raise RuntimeError("Highlight generator returned zero clips.")
-
-    top = sorted(all_highlights, key=lambda h: int(h.get("score", 0)), reverse=True)
-    if num_clips > 0:
-        top = top[:num_clips]
-    print(f"[pipeline] cropping {len(top)} of {len(all_highlights)} candidates", flush=True)
-
-    shorts = crop_highlights(source_url, top, aspect_ratio=aspect_ratio)
-
-    return {
-        "mode": "api",
-        "source_video_url": source_url,
-        "transcript": transcript,
-        "highlights": all_highlights,
-        "shorts": shorts,
-    }
-
-
-def generate_shorts(
-    youtube_url: str,
-    num_clips: int = 3,
-    aspect_ratio: str = "9:16",
-    download_format: str = "720",
-    language: Optional[str] = None,
-    mode: str = "api",
-) -> Dict:
-    """Run the full pipeline and return a structured result.
-
-    Args:
-        youtube_url: source URL.
-        num_clips: how many shorts to render.
-        aspect_ratio: e.g. "9:16", "1:1".
-        download_format: source resolution ("360" / "480" / "720" / "1080").
-        language: ISO-639-1 to force Whisper language detection.
-        mode: "api" (default, MuAPI) or "local" (yt-dlp + faster-whisper +
-            OpenAI + ffmpeg).
-
-    Returns:
-        {
-          "mode": "api" | "local",
-          "source_video_url": str,   # hosted URL (api) or local path (local)
-          "transcript": {...},
-          "highlights": [...],       # all candidates ranked
-          "shorts": [...],           # top `num_clips` with clip_url / local path
-        }
-    """
-    mode = (mode or "api").lower()
-    if mode == "local":
-        return _run_local(youtube_url, num_clips, aspect_ratio, download_format, language)
-    if mode == "api":
-        return _run_api(youtube_url, num_clips, aspect_ratio, download_format, language)
-    raise ValueError(f"Unknown mode: {mode!r}. Use 'api' or 'local'.")

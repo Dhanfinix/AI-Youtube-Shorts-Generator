@@ -10,11 +10,11 @@ if os.getcwd() not in sys.path:
     sys.path.append(os.getcwd())
 
 try:
-    from shorts_generator.local.downloader import validate_youtube_cookies
+    from shorts_generator.downloader import validate_youtube_cookies
 except ImportError:
     # Fallback if executed from inside tests folder
     sys.path.append(os.path.abspath(".."))
-    from shorts_generator.local.downloader import validate_youtube_cookies
+    from shorts_generator.downloader import validate_youtube_cookies
 
 def test_expired_cookies():
     print("--- TEST 1: Expired Cookies ---")
