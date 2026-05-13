@@ -1280,6 +1280,7 @@ def _reframe_vertical(
     draw_subtitles: bool = True,
     title: Optional[str] = None,
     source_metadata: Optional[Dict] = None,
+    save_static_thumbnail_path: Optional[str] = None,
 ) -> str:
     """Crop video, apply smooth horizontal face tracking, and burn karaoke captions."""
     try:
@@ -1475,6 +1476,15 @@ def _reframe_vertical(
             face_canvas_x = int(((center_x - x0) / crop_w) * out_w)
             face_canvas_y = int(out_h * 0.32)
             cropped = render_thumbnail(cropped, title, out_w, out_h, face_canvas_x, face_canvas_y)
+            
+            # Dynamic Capture of the final stylized first frame for custom YouTube thumbnail delivery
+            if frame_idx == 1 and save_static_thumbnail_path:
+                try:
+                    import cv2
+                    cv2.imwrite(save_static_thumbnail_path, cropped)
+                    print(f"[clip/local] Saved static YouTube thumbnail: {os.path.basename(save_static_thumbnail_path)}", flush=True)
+                except Exception as ste:
+                    print(f"[clip/local] Warning: Thumbnail image save failed ({ste})", flush=True)
 
         elif draw_subtitles:
             # Active word-level highlighting logic (matches Remotion single active word)
@@ -1634,6 +1644,7 @@ def crop_clip_local(
     """Cut + reframe one highlight, returning the local mp4 path."""
     cut_path = out_path + ".cut.mp4"
     word_captions = _get_word_captions(transcript_segments or [], start_time, end_time)
+    final_thumb_path = os.path.splitext(out_path)[0] + "_thumbnail.jpg"
     
     from shorts_generator.config import USE_ASS_SUBTITLES, USE_GPU
     from shorts_generator.gpu_detector import GPUDetector
@@ -1647,7 +1658,7 @@ def crop_clip_local(
             ass_file = f"temp_subtitles_{int(start_time)}.ass"
             try:
                 # 1. Reframe vertical with subtitle drawing disabled (extremely fast!)
-                _reframe_vertical(cut_path, reframed_clean_path, aspect_ratio, start_time, word_captions, draw_subtitles=False, title=title, source_metadata=source_metadata)
+                _reframe_vertical(cut_path, reframed_clean_path, aspect_ratio, start_time, word_captions, draw_subtitles=False, title=title, source_metadata=source_metadata, save_static_thumbnail_path=final_thumb_path)
                 
                 # 2. Build the ASS subtitle file with CapCut word-highlighting
                 _create_ass_subtitle_capcut(word_captions, ass_file, start_time, max_duration=(end_time - start_time))
@@ -1679,9 +1690,9 @@ def crop_clip_local(
                 if os.path.exists(reframed_clean_path):
                     try: os.remove(reframed_clean_path)
                     except Exception: pass
-                _reframe_vertical(cut_path, out_path, aspect_ratio, start_time, word_captions, draw_subtitles=True, title=title, source_metadata=source_metadata)
+                _reframe_vertical(cut_path, out_path, aspect_ratio, start_time, word_captions, draw_subtitles=True, title=title, source_metadata=source_metadata, save_static_thumbnail_path=final_thumb_path)
         else:
-            _reframe_vertical(cut_path, out_path, aspect_ratio, start_time, word_captions, draw_subtitles=True, title=title, source_metadata=source_metadata)
+            _reframe_vertical(cut_path, out_path, aspect_ratio, start_time, word_captions, draw_subtitles=True, title=title, source_metadata=source_metadata, save_static_thumbnail_path=final_thumb_path)
     finally:
         if os.path.exists(cut_path):
             os.remove(cut_path)
@@ -1717,7 +1728,8 @@ def crop_highlights_local(
                 title=h.get("title"),
                 source_metadata=source_metadata,
             )
-            results.append({**h, "clip_url": out_path})
+            thumb_path = os.path.splitext(out_path)[0] + "_thumbnail.jpg"
+            results.append({**h, "clip_url": out_path, "thumbnail_path": thumb_path})
             
             # SIDE-CAR HELPER: Create a handy copy-paste friendly text file with metadata for posting!
             try:
@@ -1744,27 +1756,23 @@ def crop_highlights_local(
                             cur_zoom = 1.0
                             zoom_events.append(f"T={w_rel_end:.2f}s: Word \"{w_text}\" -> SMOOTH ZOOM OUT to 1.0x")
                         last_time = w_rel_end
-
-                txt_path = os.path.splitext(out_path)[0] + ".txt"
-                with open(txt_path, "w", encoding="utf-8") as f:
-                    f.write("==================================================\n")
-                    f.write("🎬  POST DETAILS / CAPTION HELPER\n")
-                    f.write("==================================================\n\n")
-                    f.write(f"📝 [JUDUL VIDEO]\n{h.get('title', 'N/A')}\n\n")
-                    f.write(f"💬 [CAPTION / DESKRIPSI VIDEO]\n{h.get('social_caption', 'N/A')}\n\n")
-                    f.write(f"🪝  [HOOK SENTENCE]\n\"{h.get('hook_sentence', 'N/A')}\"\n\n")
-                    f.write("--- METADATA INTERNAL ---\n")
-                    f.write(f"💡 [NOTE PEMBUAT / WHY VIRAL]: {h.get('virality_reason', 'N/A')}\n")
-                    f.write(f"🔥 [VIRAL SCORE]: {h.get('score', 'N/A')}/100\n\n")
-                    f.write("🔍 [DYNAMICS DEBUG - SMART ZOOM]\n")
-                    if zoom_events:
-                        for event in zoom_events:
-                            f.write(f"  ⚡ {event}\n")
-                    else:
-                        f.write("  (No zoom triggers met the 8s cooldown threshold criteria)\n")
-                    f.write("\n==================================================\n")
-                    f.write("Ready to copy and paste for Shorts / Reels / TikTok!\n")
-                print(f"[clip/local] Created companion metadata: {os.path.basename(txt_path)}", flush=True)
+                # Clean machine-readable metadata JSON
+                json_path = os.path.splitext(out_path)[0] + "_metadata.json"
+                meta_payload = {
+                    "title": h.get("title", "Untitled Clip"),
+                    "description": h.get("social_caption", ""),
+                    "hook": h.get("hook_sentence", ""),
+                    "score": h.get("score", 0),
+                    "virality_reason": h.get("virality_reason", ""),
+                    "start_time": float(h.get("start_time", 0)),
+                    "end_time": float(h.get("end_time", 0)),
+                    "thumbnail_file": os.path.basename(thumb_path),
+                    "smart_zoom_events": zoom_events
+                }
+                import json
+                with open(json_path, "w", encoding="utf-8") as jf:
+                    json.dump(meta_payload, jf, indent=2, ensure_ascii=False)
+                print(f"[clip/local] Created clip metadata: {os.path.basename(json_path)}", flush=True)
             except Exception as te:
                 print(f"[clip/local] Info: Could not create metadata file: {te}", flush=True)
         except Exception as e:
