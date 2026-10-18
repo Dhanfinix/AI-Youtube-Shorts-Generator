@@ -29,7 +29,7 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
-          python resolve_and_download.py --url "${{ github.event.inputs.youtube_url }}" --format 720
+          python resolve_and_download.py --url "${{ github.event.inputs.youtube_url }}" --format 720 --num-clips "${{ github.event.inputs.num_clips || 3 }}"
 
       - name: Upload Downloaded Source
         uses: actions/upload-artifact@v4

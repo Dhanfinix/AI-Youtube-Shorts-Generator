@@ -1,7 +1,8 @@
 """Helper script for Job 1 on device (Self-Hosted Runner).
 
-Resolves the target YouTube video (from user URL input or trends)
-and downloads it using local yt-dlp.
+Resolves the target YouTube video (from user URL input or trends),
+downloads it using local yt-dlp, and uses the on-device Antigravity CLI (`agy`)
+to analyze the transcript and generate viral draft highlights without API keys.
 """
 import os
 import sys
@@ -9,6 +10,8 @@ import glob
 import json
 import argparse
 import subprocess
+
+from shorts_generator.agy_llm import parse_json3_subtitles, generate_highlights_with_agy
 
 def check_video_available(url: str) -> bool:
     """Verifies if a YouTube video is currently public, active, and accessible."""
@@ -76,9 +79,10 @@ def resolve_target_url(input_url: str) -> str:
     raise RuntimeError("Could not find any available YouTube video to process.")
 
 def main():
-    parser = argparse.ArgumentParser(description="Resolve and download YouTube video locally")
+    parser = argparse.ArgumentParser(description="Resolve, download, and detect viral highlights locally")
     parser.add_argument("--url", default="", help="Target YouTube URL (optional)")
     parser.add_argument("--format", default="720", help="Max video resolution height")
+    parser.add_argument("--num-clips", type=int, default=3, help="Number of viral highlights to detect")
     args = parser.parse_args()
 
     target_url = resolve_target_url(args.url)
@@ -96,6 +100,9 @@ def main():
         "--merge-output-format", "mp4",
         "--write-info-json",
         "--write-thumbnail",
+        "--write-auto-sub",
+        "--sub-lang", "id,id-orig,en",
+        "--sub-format", "json3",
         "-o", out_template,
         target_url,
     ]
@@ -118,6 +125,7 @@ def main():
         print(f"[download] Error: Target video file was not created.", file=sys.stderr, flush=True)
         sys.exit(1)
 
+    # Save metadata
     info_matches = glob.glob(os.path.join(out_dir, "source_video*.info.json"))
     info_data = {"url": target_url}
     if info_matches:
@@ -138,7 +146,49 @@ def main():
         json.dump(info_data, f, indent=2)
 
     size_mb = os.path.getsize(target_video) / (1024 * 1024)
-    print(f"✅ Success! Saved {target_video} ({size_mb:.1f} MB)", flush=True)
+    print(f"✅ Video Downloaded: {target_video} ({size_mb:.1f} MB)", flush=True)
+
+    # Process Subtitles & AI Viral Highlight Drafts via `agy`
+    sub_matches = glob.glob(os.path.join(out_dir, "*.json3"))
+    if sub_matches:
+        json3_file = sub_matches[0]
+        # Prioritize Indonesian subtitles if available
+        for sm in sub_matches:
+            if ".id." in sm or ".id-orig." in sm:
+                json3_file = sm
+                break
+
+        print(f"[agy/ai] Parsing subtitle track: {os.path.basename(json3_file)}...", flush=True)
+        try:
+            transcript = parse_json3_subtitles(json3_file)
+            transcript_file = os.path.join(out_dir, "transcript.json")
+            with open(transcript_file, "w", encoding="utf-8") as tf:
+                json.dump(transcript, tf, indent=2)
+            print(f"[agy/ai] Saved transcript with {len(transcript['segments'])} segments.", flush=True)
+
+            # Generate viral draft with local agy
+            highlights_result = generate_highlights_with_agy(transcript["segments"], num_clips=args.num_clips)
+            if highlights_result and highlights_result.get("highlights"):
+                highlights_file = os.path.join(out_dir, "highlights.json")
+                with open(highlights_file, "w", encoding="utf-8") as hf:
+                    json.dump(highlights_result, hf, indent=2)
+
+                print("\n" + "🔥" * 25, flush=True)
+                print("   VIRAL HIGHLIGHT DRAFT GENERATED VIA AGY", flush=True)
+                print("🔥" * 25, flush=True)
+                for idx, h in enumerate(highlights_result["highlights"], 1):
+                    start = h.get("start_time", 0)
+                    end = h.get("end_time", 0)
+                    score = h.get("score", 0)
+                    title = h.get("title", "Untitled")
+                    hook = h.get("hook_sentence", "")
+                    print(f"[{idx}] ⏱ {start:.1f}s -> {end:.1f}s | ⭐ {score} | {title}", flush=True)
+                    print(f"    🪝 Hook: {hook}", flush=True)
+                print("-" * 50 + "\n", flush=True)
+        except Exception as e:
+            print(f"[agy/ai] Subtitle / agy processing warning: {e}", flush=True)
+    else:
+        print("[agy/ai] No subtitles available; cloud runner will perform fallback transcription.", flush=True)
 
 if __name__ == "__main__":
     main()
