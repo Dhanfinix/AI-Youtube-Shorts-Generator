@@ -101,17 +101,15 @@ def main():
         "--write-info-json",
         "--write-thumbnail",
         "--write-auto-sub",
-        "--sub-lang", "id,id-orig,en",
+        "--sub-lang", "id,id-orig",
         "--sub-format", "json3",
+        "--no-abort-on-error",
         "-o", out_template,
         target_url,
     ]
 
     print(f"[download] Starting download via yt-dlp: {target_url}...", flush=True)
-    res = subprocess.run(cmd)
-    if res.returncode != 0:
-        print(f"[download] yt-dlp failed with exit code {res.returncode}", file=sys.stderr, flush=True)
-        sys.exit(res.returncode)
+    subprocess.run(cmd)
 
     target_video = os.path.join(out_dir, "source_video.mp4")
     if not os.path.exists(target_video):
@@ -150,6 +148,21 @@ def main():
 
     # Process Subtitles & AI Viral Highlight Drafts via `agy`
     sub_matches = glob.glob(os.path.join(out_dir, "*.json3"))
+    if not sub_matches:
+        print("[download] No Indonesian subtitles found. Checking for English subtitles...", flush=True)
+        sub_cmd = [
+            "yt-dlp",
+            "--no-update",
+            "--skip-download",
+            "--write-auto-sub",
+            "--sub-lang", "en,en-orig",
+            "--sub-format", "json3",
+            "-o", out_template,
+            target_url,
+        ]
+        subprocess.run(sub_cmd)
+        sub_matches = glob.glob(os.path.join(out_dir, "*.json3"))
+
     if sub_matches:
         json3_file = sub_matches[0]
         # Prioritize Indonesian subtitles if available
