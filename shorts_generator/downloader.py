@@ -373,23 +373,24 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
 def lookup_youtube_url_by_title(title: str) -> Optional[str]:
     """Perform an instant, zero-download yt-dlp search to resolve accurate target URL."""
     try:
-        yt_dlp = _import_ytdlp()
-        # Configure for absolutely maximum speed flat list ingestion
-        opts = {
-            "skip_download": True,
-            "quiet": True,
-            "no_warnings": True,
-            "extract_flat": True,
-            "noprogress": True,
-        }
-        search_query = f"ytsearch1:{title}"
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(search_query, download=False)
-            if info and "entries" in info and len(info["entries"]) > 0:
-                first_entry = info["entries"][0]
-                vid = first_entry.get("id")
-                if vid:
-                    return f"https://www.youtube.com/watch?v={vid}"
+        import re
+        import subprocess
+        # Clean title: remove leading episode numbers, emojis, and parentheticals
+        cleaned = re.sub(r"^\d+\s*[-–:]\s*", "", title)
+        cleaned = re.sub(r"\(ft\..*?\)", "", cleaned, flags=re.IGNORECASE)
+        words = [w for w in re.sub(r"[^\w\s]", " ", cleaned).split() if len(w) > 1]
+        query = " ".join(words[:5]) if words else title[:40]
+        search_query = f"ytsearch1:{query}"
+        res = subprocess.run(
+            ["yt-dlp", "--no-update", "--js-runtimes", "node", "--get-id", search_query],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        vid_id = res.stdout.strip()
+        if vid_id and "dQw4w9WgXcQ" not in vid_id:
+            return f"https://www.youtube.com/watch?v={vid_id}"
     except Exception:
         pass
     return None
+

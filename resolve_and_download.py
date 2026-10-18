@@ -15,6 +15,8 @@ from shorts_generator.agy_llm import parse_json3_subtitles, generate_highlights_
 
 def check_video_available(url: str) -> bool:
     """Verifies if a YouTube video is currently public, active, and accessible."""
+    if not url or "dQw4w9WgXcQ" in url or "example.com" in url:
+        return False
     try:
         res = subprocess.run(
             ["yt-dlp", "--no-update", "--simulate", "--quiet", "--no-warnings", url],
@@ -23,6 +25,19 @@ def check_video_available(url: str) -> bool:
             timeout=25,
         )
         return res.returncode == 0
+    except Exception:
+        return False
+
+def check_video_has_subtitles(url: str) -> bool:
+    """Checks if a YouTube video has native or automatic subtitles available."""
+    try:
+        res = subprocess.run(
+            ["yt-dlp", "--no-update", "--js-runtimes", "node", "--list-subs", url],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        return "Available subtitles" in res.stdout or "Available automatic captions" in res.stdout
     except Exception:
         return False
 
@@ -42,39 +57,69 @@ def resolve_target_url(input_url: str) -> str:
 
         videos = get_trending_videos()
         if videos:
+            # First pass: look for a candidate that is accessible AND has subtitles
             for idx, vid in enumerate(videos, 1):
                 title = vid.get("title", "")
                 print(f"[resolve] Evaluating candidate #{idx}: '{title}'...", flush=True)
                 cand_url = lookup_youtube_url_by_title(title) if title else None
-                if not cand_url:
-                    cand_url = vid.get("url")
+                raw_url = vid.get("url") or ""
+                if not cand_url and raw_url and check_video_available(raw_url):
+                    cand_url = raw_url
 
                 if cand_url and check_video_available(cand_url):
-                    print(f"[resolve] ✅ Confirmed accessible video #{idx}: {cand_url}", flush=True)
-                    return cand_url
-                else:
-                    print(f"[resolve] ⚠️ Candidate #{idx} is unavailable or private. Checking next...", flush=True)
+                    if check_video_has_subtitles(cand_url):
+                        print(f"[resolve] ✅ Confirmed accessible video with subtitles #{idx}: {cand_url}", flush=True)
+                        return cand_url
+                    else:
+                        print(f"[resolve] ℹ️ Candidate #{idx} has no subtitles yet. Trying next candidate...", flush=True)
     except Exception as e:
         print(f"[resolve] Trending lookup encountered error: {e}", flush=True)
 
-    # Secondary fallback search
-    print("[resolve] Running fallback search for trending podcast...", flush=True)
-    for fallback_query in ["ytsearch1:podcast indonesia terbaru", "ytsearch1:ted talk latest"]:
+    # Bulletproof fallback search directly querying YouTube trending Indonesian podcasts
+    print("[resolve] Running direct YouTube search for active trending podcasts with subtitles...", flush=True)
+    trending_queries = [
+        "ytsearch5:podcast close the door terbaru",
+        "ytsearch5:podcast indonesia terbaru",
+        "ytsearch5:curhat bang denny sumargo terbaru",
+        "ytsearch5:podcast agak laen terbaru",
+    ]
+    for fallback_query in trending_queries:
         try:
             res = subprocess.run(
-                ["yt-dlp", "--no-update", "--get-id", fallback_query],
+                ["yt-dlp", "--no-update", "--js-runtimes", "node", "--get-id", fallback_query],
                 capture_output=True,
                 text=True,
-                timeout=20
+                timeout=25
             )
-            vid_id = res.stdout.strip()
-            if vid_id:
+            vid_ids = [line.strip() for line in res.stdout.splitlines() if line.strip()]
+            for vid_id in vid_ids:
+                if "dQw4w9WgXcQ" in vid_id:
+                    continue
+                cand_url = f"https://www.youtube.com/watch?v={vid_id}"
+                if check_video_available(cand_url):
+                    if check_video_has_subtitles(cand_url):
+                        print(f"[resolve] ✅ Selected trending podcast with subtitles: {cand_url}", flush=True)
+                        return cand_url
+        except Exception:
+            continue
+
+    # If none had subtitles, pick any available candidate from the first query
+    try:
+        res = subprocess.run(
+            ["yt-dlp", "--no-update", "--js-runtimes", "node", "--get-id", "ytsearch3:podcast indonesia terbaru"],
+            capture_output=True,
+            text=True,
+            timeout=20
+        )
+        for vid_id in res.stdout.splitlines():
+            vid_id = vid_id.strip()
+            if vid_id and "dQw4w9WgXcQ" not in vid_id:
                 cand_url = f"https://www.youtube.com/watch?v={vid_id}"
                 if check_video_available(cand_url):
                     print(f"[resolve] ✅ Selected fallback video: {cand_url}", flush=True)
                     return cand_url
-        except Exception:
-            continue
+    except Exception:
+        pass
 
     raise RuntimeError("Could not find any available YouTube video to process.")
 
@@ -92,6 +137,7 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
     out_template = os.path.join(out_dir, "source_video.%(ext)s")
 
+    # Step 1: Download video, audio, info json, thumbnail without subtitles to ensure download never aborts
     cmd = [
         "yt-dlp",
         "--no-update",
@@ -100,10 +146,6 @@ def main():
         "--merge-output-format", "mp4",
         "--write-info-json",
         "--write-thumbnail",
-        "--write-auto-sub",
-        "--sub-lang", "id,id-orig",
-        "--sub-format", "json3",
-        "--no-abort-on-error",
         "-o", out_template,
         target_url,
     ]
@@ -146,13 +188,29 @@ def main():
     size_mb = os.path.getsize(target_video) / (1024 * 1024)
     print(f"✅ Video Downloaded: {target_video} ({size_mb:.1f} MB)", flush=True)
 
+    # Step 2: Download Subtitles Independently (non-fatal if unavailable)
+    print(f"[download] Fetching Indonesian subtitles for: {target_url}...", flush=True)
+    sub_cmd = [
+        "yt-dlp",
+        "--no-update",
+        "--js-runtimes", "node",
+        "--skip-download",
+        "--write-auto-sub",
+        "--sub-lang", "id,id-orig",
+        "--sub-format", "json3",
+        "-o", out_template,
+        target_url,
+    ]
+    subprocess.run(sub_cmd)
+
     # Process Subtitles & AI Viral Highlight Drafts via `agy`
     sub_matches = glob.glob(os.path.join(out_dir, "*.json3"))
     if not sub_matches:
         print("[download] No Indonesian subtitles found. Checking for English subtitles...", flush=True)
-        sub_cmd = [
+        sub_en_cmd = [
             "yt-dlp",
             "--no-update",
+            "--js-runtimes", "node",
             "--skip-download",
             "--write-auto-sub",
             "--sub-lang", "en,en-orig",
@@ -160,7 +218,7 @@ def main():
             "-o", out_template,
             target_url,
         ]
-        subprocess.run(sub_cmd)
+        subprocess.run(sub_en_cmd)
         sub_matches = glob.glob(os.path.join(out_dir, "*.json3"))
 
     if sub_matches:
