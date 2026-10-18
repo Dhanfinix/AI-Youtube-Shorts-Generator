@@ -91,6 +91,7 @@ def main():
     cmd = [
         "yt-dlp",
         "--no-update",
+        "--js-runtimes", "node",
         "-f", f"bestvideo[height<={args.format}][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
         "--merge-output-format", "mp4",
         "--write-info-json",
