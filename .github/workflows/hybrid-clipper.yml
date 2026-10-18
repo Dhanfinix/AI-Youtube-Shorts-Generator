@@ -38,6 +38,11 @@ jobs:
           path: output/source/
           retention-days: 1
 
+      - name: Cleanup Local Payload (Keep Storage Clean)
+        if: always()
+        run: |
+          rm -rf output/
+
   render-on-cloud:
     name: 🎬 Render Shorts (GitHub Cloud)
     needs: download-on-device
@@ -92,5 +97,5 @@ jobs:
         with:
           name: generated-shorts
           path: output/**/shorts/*.mp4
-          retention-days: 7
+          retention-days: 1
 
