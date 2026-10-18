@@ -1,0 +1,88 @@
+name: Hybrid YouTube Shorts Clipper
+
+on:
+  workflow_dispatch:
+    inputs:
+      youtube_url:
+        description: 'YouTube URL (leave empty to auto-pick top trending podcast)'
+        required: false
+        default: ''
+      num_clips:
+        description: 'Number of shorts to render'
+        required: false
+        default: '3'
+      aspect_ratio:
+        description: 'Target aspect ratio (9:16 or 1:1)'
+        required: false
+        default: '9:16'
+
+jobs:
+  download-on-device:
+    name: 📥 Download Video (Local Device)
+    runs-on: [self-hosted, android-device]
+    timeout-minutes: 30
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Resolve and Download Video
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python resolve_and_download.py --url "${{ github.event.inputs.youtube_url }}" --format 720
+
+      - name: Upload Downloaded Source
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-payload
+          path: output/source/
+          retention-days: 1
+
+  render-on-cloud:
+    name: 🎬 Render Shorts (GitHub Cloud)
+    needs: download-on-device
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Install Python Dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-local.txt
+
+      - name: Download Video Payload
+        uses: actions/download-artifact@v4
+        with:
+          name: source-payload
+          path: output/source
+
+      - name: Render Vertical Shorts
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          TARGET_FILE=$(find output/source -name "source_video.mp4" | head -n 1)
+          python main.py "$TARGET_FILE" \
+            --num-clips "${{ github.event.inputs.num_clips || 3 }}" \
+            --aspect-ratio "${{ github.event.inputs.aspect_ratio || '9:16' }}" \
+            --auto
+
+      - name: Upload Final Shorts Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-shorts
+          path: output/**/shorts/*.mp4
+          retention-days: 7

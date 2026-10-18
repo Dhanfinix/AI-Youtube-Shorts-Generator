@@ -256,6 +256,10 @@ def _resolve_output_path(ydl, info) -> str:
 
 def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[str] = None) -> str:
     """Download to disk and return the local mp4 path using standard, stable extraction."""
+    if os.path.exists(video_url) and os.path.isfile(video_url):
+        print(f"[download/local] Using pre-downloaded local file: {video_url}", flush=True)
+        return os.path.abspath(video_url)
+
     out_dir = out_dir or LOCAL_OUTPUT_DIR
     os.makedirs(out_dir, exist_ok=True)
 

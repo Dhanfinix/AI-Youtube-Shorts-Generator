@@ -102,6 +102,7 @@ def main() -> int:
     parser.add_argument("--output-json", default=None, help="Write the full result JSON to this path")
     parser.add_argument("--interactive", action="store_true", help="Pause and choose which candidates to render")
     parser.add_argument("--trends", action="store_true", help="Discover trending podcasts and choose one to process")
+    parser.add_argument("--auto", action="store_true", help="Non-interactive execution, automatically select top trending video")
     
     # New Upload Flags
     parser.add_argument("--upload", action="store_true", help="Prompt to upload rendered clips to YouTube automatically")
@@ -137,10 +138,13 @@ def main() -> int:
                 date_str = v.get('date', 'Unknown Date')
                 print(f"[{idx:2}] 📅 {date_str} | 🎙️ {v.get('title')}")
             
-            print("\n👉 Enter the number you want to process")
-            print("👉 Or press Ctrl+C to exit")
-            
-            choice = input("\nChoice > ").strip()
+            if args.auto or not sys.stdin.isatty():
+                print(f"\n[trends/auto] Automated mode active: selecting top trending podcast #1: {videos[0].get('title')}", flush=True)
+                choice = "1"
+            else:
+                print("\n👉 Enter the number you want to process")
+                print("👉 Or press Ctrl+C to exit")
+                choice = input("\nChoice > ").strip()
             if not choice:
                 print("[trends] No selection made. Exiting.", flush=True)
                 return 0
