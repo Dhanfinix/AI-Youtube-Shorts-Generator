@@ -80,9 +80,17 @@ jobs:
             --aspect-ratio "${{ github.event.inputs.aspect_ratio || '9:16' }}" \
             --auto
 
+      - name: Send Shorts to Telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python send_telegram.py
+
       - name: Upload Final Shorts Artifact
         uses: actions/upload-artifact@v4
         with:
           name: generated-shorts
           path: output/**/shorts/*.mp4
           retention-days: 7
+
